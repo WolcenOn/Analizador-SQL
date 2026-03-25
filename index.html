@@ -534,6 +534,7 @@
     let hiddenEntities    = new Set();   // entity names hidden by user
     let entityCustomNames = new Map();   // entity.id → custom display name
     let selectedTableName = null;
+    let selectedConceptualRelationId = null;
     let currentProcedures = [];
     let procedurePositions = new Map();
     let procedureDescriptionOverrides = new Map();
@@ -545,7 +546,7 @@
     let panState       = null;
     let _hasFitRelational = false;
     let _hasFitConceptual = false;
-    const STORAGE_PREFIX = 'sql-diagram-layout-v20:';
+    const STORAGE_PREFIX = 'sql-diagram-layout-v21:';
 
     function schemaSignature(model = currentModel) {
       if (!model || !Array.isArray(model.tables)) return 'empty';
@@ -613,7 +614,7 @@
         procedureDescriptionOverrides = new Map(Object.entries(payload.procedureDescriptionOverrides || {}));
         visibilityState = Object.assign({ tables:true, views:true, triggers:true, procedures:true }, payload.visibilityState || {});
         selectedOverlays = new Set(Array.isArray(payload.selectedOverlays) ? payload.selectedOverlays : (payload.activeOverlay ? [payload.activeOverlay] : []));
-        showAllOverlayRelations = !!payload.showAllOverlayRelations;
+        showAllOverlayRelations = false;
         layoutAlgorithm = payload.layoutAlgorithm || 'hierarchical';
         relCustomNames   = new Map(Object.entries(payload.relCustomNames || {}));
         entityCustomNames= new Map(Object.entries(payload.entityCustomNames || {}));
@@ -1267,6 +1268,15 @@
       return { x: snapToGrid(x, step), y: snapToGrid(y, step) };
     }
 
+    function ensureCanvasSize(minWidth, minHeight, padding = 120) {
+      const vb = diagram.viewBox.baseVal;
+      const nextWidth = Math.max(vb.width || 0, (minWidth || 0) + padding, 1200);
+      const nextHeight = Math.max(vb.height || 0, (minHeight || 0) + padding, 900);
+      if (nextWidth > (vb.width || 0) || nextHeight > (vb.height || 0)) {
+        diagram.setAttribute('viewBox', `0 0 ${nextWidth} ${nextHeight}`);
+      }
+    }
+
     function computeConceptualLayoutByAlgorithm(conceptual) {
       if (!conceptual || !conceptual.entities?.length) return new Map();
       const pseudoTables = conceptual.entities.map(entity => ({
@@ -1893,6 +1903,7 @@
         conceptPositions = computeConceptualLayoutByAlgorithm(currentConceptual);
         _hasFitConceptual = false;
       }
+      persistCurrentLayout();
       redrawFromState();
       const crossingCount = (diagramModeEl.value==='relational')
         ? countRelationCrossingsForPositions(tablePositions, currentModel.tables, currentRelations)
@@ -1904,36 +1915,59 @@
 
     // ── Dragging ──────────────────────────────────────────────────────────────
     function attachDraggingRelational(laidOut) {
+      const dragThreshold = 6;
       zoomLayer.querySelectorAll('.table-group').forEach(group => {
         group.addEventListener('pointerdown', evt => {
           evt.stopPropagation();
           const table = laidOut.find(t=>t.name===group.dataset.id); if(!table) return;
           const pos = getPointerPosition(evt);
-          dragState = {mode:'relational',id:table.name,
+          dragState = {
+            mode:'relational',
+            id:table.name,
+            pointerId: evt.pointerId,
             offsetX:pos.x-table.x, offsetY:pos.y-table.y,
-            startX:table.x, startY:table.y};
-          group.classList.add('dragging');
-          group.querySelector('.table-card')?.classList.add('drag-target');
+            startX:table.x, startY:table.y,
+            pointerStartX: pos.x, pointerStartY: pos.y,
+            moved:false
+          };
           group.setPointerCapture(evt.pointerId);
         });
         const move = evt => {
-          if (!dragState||dragState.id!==group.dataset.id) return;
+          if (!dragState||dragState.id!==group.dataset.id||dragState.pointerId!==evt.pointerId) return;
           const table = laidOut.find(t=>t.name===dragState.id); if(!table) return;
           const pos = getPointerPosition(evt);
+          const dx = pos.x - dragState.pointerStartX;
+          const dy = pos.y - dragState.pointerStartY;
+          if (!dragState.moved && Math.hypot(dx, dy) < dragThreshold) return;
+          if (!dragState.moved) {
+            dragState.moved = true;
+            group.classList.add('dragging');
+            group.querySelector('.table-card')?.classList.add('drag-target');
+          }
           let nx = Math.max(20, pos.x - dragState.offsetX);
           let ny = Math.max(20, pos.y - dragState.offsetY);
           ({ x: nx, y: ny } = applySnapPoint(nx, ny, evt));
-          // Fast path: just translate the group, no full redraw
           group.setAttribute('transform', `translate(${nx - dragState.startX},${ny - dragState.startY})`);
           table.x = nx; table.y = ny;
+          ensureCanvasSize(nx + table.width, ny + table.height);
         };
         const up = evt => {
-          if (!dragState||dragState.id!==group.dataset.id) return;
+          if (!dragState||dragState.id!==group.dataset.id||dragState.pointerId!==evt.pointerId) return;
+          const wasDrag = dragState.moved;
           group.removeAttribute('transform');
           group.classList.remove('dragging');
           group.querySelector('.table-card')?.classList.remove('drag-target');
-          saveRelationalLayout(laidOut);
-          redrawFromState(); // full redraw only on release
+          if (wasDrag) {
+            saveRelationalLayout(laidOut);
+            const draggedTable = laidOut.find(t => t.name === group.dataset.id);
+            if (draggedTable) ensureCanvasSize(draggedTable.x + draggedTable.width, draggedTable.y + draggedTable.height);
+          } else {
+            selectedTableName = group.dataset.id;
+            selectedConceptualRelationId = null;
+            selectedOverlays.clear();
+            updateSchemaEditor();
+          }
+          redrawFromState();
           dragState = null;
           try{group.releasePointerCapture(evt.pointerId);}catch(_){}
         };
@@ -1942,6 +1976,7 @@
     }
 
     function attachDraggingConceptual(entities, relationships) {
+      const dragThreshold = 6;
       zoomLayer.querySelectorAll('.entity-group, .relationship-group').forEach(group => {
         // Double-click → open in-SVG editor
         group.addEventListener('dblclick', evt => {
@@ -1961,32 +1996,71 @@
           const isEntity = group.dataset.kind==='entity';
           const item = isEntity ? entities.find(e=>e.id===group.dataset.id) : relationships.find(r=>r.id===group.dataset.id);
           if (!item) return;
+          group.__itemWidth = isEntity ? (item.width || 180) : ((item.size || 90) + 20);
+          group.__itemHeight = isEntity ? (item.height || 50) : ((item.size || 90) + 20);
           const pos = getPointerPosition(evt);
-          dragState = {mode:'conceptual',kind:group.dataset.kind,id:item.id,
+          dragState = {
+            mode:'conceptual',
+            kind:group.dataset.kind,
+            id:item.id,
+            pointerId: evt.pointerId,
             offsetX:pos.x-item.x, offsetY:pos.y-item.y,
-            startX:item.x, startY:item.y};
-          group.classList.add('dragging');
-          group.querySelector('.entity-rect,.weak-entity-outer,.diamond,.diamond-outer')?.classList.add('drag-target');
+            startX:item.x, startY:item.y,
+            pointerStartX: pos.x, pointerStartY: pos.y,
+            moved:false
+          };
           group.setPointerCapture(evt.pointerId);
         });
         const move = evt => {
-          if (!dragState||dragState.id!==group.dataset.id) return;
+          if (!dragState||dragState.id!==group.dataset.id||dragState.pointerId!==evt.pointerId) return;
           const list = dragState.kind==='entity' ? entities : relationships;
           const item = list.find(x=>x.id===dragState.id); if(!item) return;
           const pos = getPointerPosition(evt);
+          const dx = pos.x - dragState.pointerStartX;
+          const dy = pos.y - dragState.pointerStartY;
+          if (!dragState.moved && Math.hypot(dx, dy) < dragThreshold) return;
+          if (!dragState.moved) {
+            dragState.moved = true;
+            group.classList.add('dragging');
+            group.querySelector('.entity-rect,.weak-entity-outer,.diamond,.diamond-outer')?.classList.add('drag-target');
+          }
           let nx = Math.max(20, pos.x - dragState.offsetX);
           let ny = Math.max(20, pos.y - dragState.offsetY);
           ({ x: nx, y: ny } = applySnapPoint(nx, ny, evt));
-          // Fast translate during drag
           group.setAttribute('transform', `translate(${nx - dragState.startX},${ny - dragState.startY})`);
           item.x = nx; item.y = ny;
+          const itemW = dragState.kind === 'entity' ? (item.width || 180) : ((item.size || 90) + 20);
+          const itemH = dragState.kind === 'entity' ? (item.height || 50) : ((item.size || 90) + 20);
+          ensureCanvasSize(nx + itemW, ny + itemH);
         };
         const up = evt => {
-          if (!dragState||dragState.id!==group.dataset.id) return;
+          if (!dragState||dragState.id!==group.dataset.id||dragState.pointerId!==evt.pointerId) return;
+          const wasDrag = dragState.moved;
           group.removeAttribute('transform');
           group.classList.remove('dragging');
           group.querySelector('.entity-rect,.weak-entity-outer,.diamond,.diamond-outer')?.classList.remove('drag-target');
-          saveConceptualLayout(entities, relationships);
+          if (wasDrag) {
+            saveConceptualLayout(entities, relationships);
+            const list = dragState.kind === 'entity' ? entities : relationships;
+            const droppedItem = list.find(x => x.id === dragState.id);
+            const itemW = dragState.kind === 'entity' ? (group.__itemWidth || 180) : (group.__itemWidth || 110);
+            const itemH = dragState.kind === 'entity' ? (group.__itemHeight || 50) : (group.__itemHeight || 110);
+            if (droppedItem) ensureCanvasSize((droppedItem.x || 0) + itemW, (droppedItem.y || 0) + itemH);
+          } else if (group.dataset.kind === 'entity') {
+            const rawId = group.getAttribute('data-id') || '';
+            selectedTableName = rawId.startsWith('entity:') ? rawId.slice(7) : rawId;
+            selectedConceptualRelationId = null;
+            selectedOverlays.clear();
+            updateSchemaEditor();
+          } else if (group.dataset.kind === 'relationship') {
+            const rel = relationships.find(r => r.id === group.dataset.id);
+            if (rel?.sourceTable && getTableByName(rel.sourceTable)) {
+              selectedTableName = rel.sourceTable;
+              selectedConceptualRelationId = rel.id;
+              selectedOverlays.clear();
+              updateSchemaEditor();
+            }
+          }
           redrawFromState();
           dragState = null;
           try{group.releasePointerCapture(evt.pointerId);}catch(_){}
@@ -2214,8 +2288,49 @@
       selectedTableName = from.name;
       applyModelRefresh({status:'Relación añadida al modelo.'});
     }
+    function normalizeNameKey(value) {
+      return String(value || '').replace(/[`"]/g, '').split('.').pop().trim().toLowerCase();
+    }
     function getTableByName(name) {
-      return currentModel?.tables.find(t => t.name === name) || null;
+      const key = normalizeNameKey(name);
+      if (!key || !currentModel?.tables?.length) return null;
+      return currentModel.tables.find(t => (
+        normalizeNameKey(t.name) === key
+        || normalizeNameKey(t.fullName || '') === key
+      )) || null;
+    }
+    function findBridgeTableByRefs(refNames=[]) {
+      const refKeys = [...new Set((refNames || []).map(normalizeNameKey).filter(Boolean))];
+      if (!refKeys.length || !currentModel?.tables?.length) return null;
+      const candidates = currentModel.tables.filter(t => (t.foreignKeys || []).length >= 2);
+      let best = null;
+      let bestScore = -1;
+      candidates.forEach(table => {
+        const fkRefs = new Set((table.foreignKeys || []).map(fk => normalizeNameKey(fk.refTable)).filter(Boolean));
+        const score = refKeys.filter(key => fkRefs.has(key)).length;
+        if (score > bestScore || (score === bestScore && score > 0 && table.isBridge && !best?.isBridge)) {
+          best = table;
+          bestScore = score;
+        }
+      });
+      return bestScore > 0 ? best : null;
+    }
+    function resolveSelectedTable(tableName) {
+      const direct = getTableByName(tableName);
+      if (direct) return direct;
+      const selectedRel = selectedConceptualRelationId
+        ? currentConceptual?.relations?.find(r => r.id === selectedConceptualRelationId)
+        : null;
+      if (selectedRel?.sourceTable) {
+        const srcTable = getTableByName(selectedRel.sourceTable);
+        if (srcTable) return srcTable;
+      }
+      if (selectedRel?.between?.length) {
+        const inferred = findBridgeTableByRefs(selectedRel.between);
+        if (inferred) return inferred;
+      }
+      const tokens = String(tableName || '').split(/[^\w$#]+/).map(normalizeNameKey).filter(Boolean);
+      return findBridgeTableByRefs(tokens);
     }
     function updateSchemaEditor() {
       const editing = workModeEl.value === 'edit';
@@ -2290,7 +2405,7 @@
         const row = input.closest('.field-row, .fk-row');
         const card = input.closest('[data-table-card]');
         const tableName = input.getAttribute('data-table') || row?.dataset.table || card?.getAttribute('data-table-card');
-        const table = getTableByName(tableName);
+        const table = resolveSelectedTable(tableName);
         if (!table) return;
         if (action === 'col-type') {
           const idx = Number(row.dataset.colIndex);
@@ -2593,8 +2708,25 @@
             const row = {};
             cols.forEach((c, i) => row[c] = vals[i] ?? null);
             row.__sql = cleanStmt + ';';
-            if (!res.has(table.name)) res.set(table.name, []);
-            res.get(table.name).push(row);
+            const aliases = [
+              table.name,
+              normalizeNameKey(table.name),
+              table.fullName,
+              normalizeNameKey(table.fullName),
+              tableName,
+              normalizeNameKey(tableName)
+            ].filter(Boolean);
+            let bucket = null;
+            for (const alias of aliases) {
+              if (res.has(alias)) { bucket = res.get(alias); break; }
+            }
+            if (!bucket) {
+              bucket = [];
+              aliases.forEach(alias => { if (!res.has(alias)) res.set(alias, bucket); });
+            } else {
+              aliases.forEach(alias => { if (!res.has(alias)) res.set(alias, bucket); });
+            }
+            bucket.push(row);
           });
         });
 
@@ -2757,10 +2889,12 @@
       const pkCols = (table.columns || []).filter(c => c.isPk).map(c => c.name);
       if (pkCols.length) lines.push(`  PRIMARY KEY (${pkCols.join(', ')})`);
       (table.foreignKeys || []).forEach((fk, idx) => {
-        const name = fk.name ? `CONSTRAINT ${fk.name} ` : '';
-        lines.push(`  ${name}FOREIGN KEY (${fk.columns.join(', ')}) REFERENCES ${fk.references.table} (${fk.references.columns.join(', ')})`);
-      });
-      return `CREATE TABLE ${table.name} (\n${lines.join(',\n')}\n);`;
+        const fkName = fk.constraint || fk.name || `fk_${table.name}_${fk.refTable || idx + 1}`;
+        const refTable = fk.refTable || fk.references?.table || 'tabla_destino';
+        const refColumns = fk.refColumns || fk.references?.columns || [];
+        const localColumns = fk.columns || [];
+        lines.push(`  CONSTRAINT ${fkName} FOREIGN KEY (${localColumns.join(', ')}) REFERENCES ${refTable} (${refColumns.join(', ')})`);
+      });      return `CREATE TABLE ${table.name} (\n${lines.join(',\n')}\n);`;
     }
     function openSelectionInspector() {
       const overlayInfo = getPrimaryOverlaySelection();
@@ -2786,6 +2920,23 @@
       }
       setStatus('Selecciona una tabla para ver sus datos de prueba.', 'warn');
     }
+    function getSampleRowsForTable(tableName) {
+      const table = resolveSelectedTable(tableName);
+      if (!table) return [];
+      const aliases = [
+        table.name,
+        normalizeNameKey(table?.name),
+        table?.fullName,
+        normalizeNameKey(table?.fullName),
+        tableName,
+        normalizeNameKey(tableName)
+      ].filter(Boolean);
+      for (const alias of aliases) {
+        if (currentInserts.has(alias)) return currentInserts.get(alias) || [];
+      }
+      return [];
+    }
+
     function openTableInspectModal(tableName, opts={}) {
       const table = getTableByName(tableName);
       if (!table) return;
@@ -2793,9 +2944,9 @@
       const sub = document.getElementById('overlayInspectSub');
       const body = document.getElementById('overlayInspectBody');
       const code = document.getElementById('overlayInspectCode');
-      const rows = currentInserts.get(tableName) || [];
+      const rows = getSampleRowsForTable(table.name);
       title.textContent = `Tabla · ${table.name}`;
-      sub.textContent = `${table.columns.length} campo(s) · ${rows.length} fila(s) de prueba`;
+      sub.textContent = `${table.columns.length} campo(s) · ${rows.length} fila(s) de prueba${table.isBridge ? ' · tabla puente' : ''}`;
       const cols = (table.columns || []).map(c => c.name);
       let html = `<div class="mini-sub" style="margin-bottom:8px">${escapeHtml(table.comment || 'Definición SQL de la tabla seleccionada.')}</div>`;
       html += `<div class="overlay-related-list">${cols.map(c => `<span class="mini-pill">${escapeHtml(c)}</span>`).join('')}</div>`;
@@ -2809,7 +2960,10 @@
         }
       }
       body.innerHTML = html;
-      code.value = generateCreateTableSql(table);
+      const relationSummary = table.isBridge && table.foreignKeys?.length
+        ? `\n\n-- Tabla puente detectada\n-- Referencias: ${table.foreignKeys.map(fk => `${fk.columns.join(', ')} -> ${fk.refTable} (${fk.refColumns.join(', ')})`).join(' | ')}`
+        : '';
+      code.value = generateCreateTableSql(table) + relationSummary;
       document.getElementById('overlayInspectModal').classList.add('visible');
     }
     function setActiveOverlay(kind, id, opts={}) {
@@ -2853,7 +3007,7 @@
     }
 
     function openSampleModal(tableName) {
-      const rows = currentInserts.get(tableName) || [];
+      const rows = getSampleRowsForTable(tableName);
       const modal = document.getElementById('sampleModal');
       const title = document.getElementById('sampleModalTitle');
       const body = document.getElementById('sampleModalBody');
@@ -3002,37 +3156,40 @@
         });
       }
       visibleViews.forEach((view) => {
-        const refs = (view.refs || []).map(r => tableMap.get(String(r).toLowerCase())).filter(Boolean);
+        const refs = (view.refs || []).map(r => tableMap.get(normalizeNameKey(r))).filter(Boolean);
         const saved = viewPositions.get(view.id) || { x: 30, y: 24 };
         const x = saved.x, y = saved.y, w=205, h=78;
         const g = drawOverlayCard({id:view.id,x,y,w,h,title:`👁 ${view.name}`,sub:`${refs.length} tabla(s)`,description:view.description || '',type:'view'});
-        if (anyActive && !selectedOverlays.has(view.id)) g.classList.add('dimmed');
-        if (selectedOverlays.has(view.id)) g.classList.add(selectedOverlays.size > 1 ? 'multi-active' : 'active');
+        const viewKey = `view:${String(view.id).replace(/^.*?:/, '')}`;
+        if (anyActive && !selectedOverlays.has(viewKey)) g.classList.add('dimmed');
+        if (selectedOverlays.has(viewKey)) g.classList.add(selectedOverlays.size > 1 ? 'multi-active' : 'active');
         overlayMaxX = Math.max(overlayMaxX, x + w + 40);
         overlayMaxY = Math.max(overlayMaxY, y + h + 40);
-        if (showAllOverlayRelations || selectedOverlays.has(view.id)) refs.forEach(tbl => drawOverlayConnection({x,y,w,h}, {x:tbl.x,y:tbl.y,w:tbl.width,h:tbl.height}, 'view'));
+        if (showAllOverlayRelations || selectedOverlays.has(viewKey)) refs.forEach(tbl => drawOverlayConnection({x,y,w,h}, {x:tbl.x,y:tbl.y,w:tbl.width,h:tbl.height}, 'view'));
       });
       visibleTriggers.forEach((trg) => {
         const tbl = tableMap.get(String(trg.table).toLowerCase());
         const saved = triggerPositions.get(trg.id) || { x: Math.max(...laidOut.map(t => t.x + t.width), 500) + 100, y: 24 };
         const x = saved.x, y = saved.y, w=240, h=78;
         const g = drawOverlayCard({id:trg.id,x,y,w,h,title:`⚡ ${trg.name}`,sub:`${trg.timing} ${trg.event}`,description:trg.description || '',type:'trigger'});
-        if (anyActive && !selectedOverlays.has(trg.id)) g.classList.add('dimmed');
-        if (selectedOverlays.has(trg.id)) g.classList.add(selectedOverlays.size > 1 ? 'multi-active' : 'active');
+        const trgKey = `trigger:${String(trg.id).replace(/^.*?:/, '')}`;
+        if (anyActive && !selectedOverlays.has(trgKey)) g.classList.add('dimmed');
+        if (selectedOverlays.has(trgKey)) g.classList.add(selectedOverlays.size > 1 ? 'multi-active' : 'active');
         overlayMaxX = Math.max(overlayMaxX, x + w + 40);
         overlayMaxY = Math.max(overlayMaxY, y + h + 40);
-        if (tbl && (showAllOverlayRelations || selectedOverlays.has(trg.id))) drawOverlayConnection({x,y,w,h}, {x:tbl.x,y:tbl.y,w:tbl.width,h:tbl.height}, 'trigger');
+        if (tbl && (showAllOverlayRelations || selectedOverlays.has(trgKey))) drawOverlayConnection({x,y,w,h}, {x:tbl.x,y:tbl.y,w:tbl.width,h:tbl.height}, 'trigger');
       });
       visibleProcedures.forEach((proc) => {
-        const refs = (proc.refs || []).map(r => tableMap.get(String(r).toLowerCase())).filter(Boolean);
+        const refs = (proc.refs || []).map(r => tableMap.get(normalizeNameKey(r))).filter(Boolean);
         const saved = procedurePositions.get(proc.id) || { x: 40, y: Math.max(...laidOut.map(t => t.y + t.height), 500) + 90 };
         const x = saved.x, y = saved.y, w=240, h=78;
         const g = drawOverlayCard({id:proc.id,x,y,w,h,title:`⚙ ${proc.name}`,sub:`${refs.length} tabla(s)`,description:proc.description || '',type:'procedure'});
-        if (anyActive && !selectedOverlays.has(proc.id)) g.classList.add('dimmed');
-        if (selectedOverlays.has(proc.id)) g.classList.add(selectedOverlays.size > 1 ? 'multi-active' : 'active');
+        const procKey = `procedure:${String(proc.id).replace(/^.*?:/, '')}`;
+        if (anyActive && !selectedOverlays.has(procKey)) g.classList.add('dimmed');
+        if (selectedOverlays.has(procKey)) g.classList.add(selectedOverlays.size > 1 ? 'multi-active' : 'active');
         overlayMaxX = Math.max(overlayMaxX, x + w + 40);
         overlayMaxY = Math.max(overlayMaxY, y + h + 40);
-        if (showAllOverlayRelations || selectedOverlays.has(proc.id)) refs.forEach(tbl => drawOverlayConnection({x,y,w,h}, {x:tbl.x,y:tbl.y,w:tbl.width,h:tbl.height}, 'procedure'));
+        if (showAllOverlayRelations || selectedOverlays.has(procKey)) refs.forEach(tbl => drawOverlayConnection({x,y,w,h}, {x:tbl.x,y:tbl.y,w:tbl.width,h:tbl.height}, 'procedure'));
       });
       const vb = diagram.viewBox.baseVal;
       diagram.setAttribute('viewBox', `0 0 ${Math.max(vb.width || 0, overlayMaxX || 0, 1200)} ${Math.max(vb.height || 0, overlayMaxY || 0, 900)}`);
@@ -3062,6 +3219,7 @@
         tablePositions = new Map(); conceptPositions = new Map();
         hiddenEntities = new Set(); entityCustomNames = new Map(); relCustomNames = new Map();
         selectedTableName = model.tables[0]?.name || null;
+        selectedConceptualRelationId = null;
         _hasFitRelational = false; _hasFitConceptual = false;
         const restoredLayout = loadPersistedLayout(model);
         redrawFromState();
@@ -3366,10 +3524,22 @@
     bindSchemaEditorEvents();
 
     diagram.addEventListener('click', evt => {
-      const group = evt.target.closest('[data-kind="table"], [data-kind="entity"]');
+      if (dragState) return;
+      const group = evt.target.closest('[data-kind="table"], [data-kind="entity"], [data-kind="relationship"]');
       if (!group) return;
-      const rawId = group.getAttribute('data-id') || '';
-      selectedTableName = rawId.startsWith('entity:') ? rawId.slice(7) : rawId;
+      if (group.getAttribute('data-kind') === 'relationship') {
+        const relId = group.getAttribute('data-id') || '';
+        const rel = currentConceptual?.relations?.find(r => r.id === relId);
+        const source = rel?.sourceTable || relId.split(':')[1] || '';
+        const table = getTableByName(source);
+        if (!table) return;
+        selectedTableName = table.name;
+      } else {
+        const rawId = group.getAttribute('data-id') || '';
+        const table = getTableByName(rawId.startsWith('entity:') ? rawId.slice(7) : rawId);
+        if (!table) return;
+        selectedTableName = table.name;
+      }
       selectedOverlays.clear();
       updateSchemaEditor();
       redrawFromState();
@@ -3409,7 +3579,7 @@
       tablePositions=new Map(); conceptPositions=new Map();
       viewPositions=new Map(); triggerPositions=new Map();
       viewDescriptionOverrides=new Map(); triggerDescriptionOverrides=new Map();
-      relCustomNames=new Map(); hiddenEntities=new Set(); entityCustomNames=new Map(); selectedTableName=null;
+      relCustomNames=new Map(); hiddenEntities=new Set(); entityCustomNames=new Map(); selectedTableName=null; selectedConceptualRelationId=null;
       _hasFitRelational=false; _hasFitConceptual=false;
       entitySelectorPanel.classList.remove('visible');
       relEditorPanel.classList.remove('visible');
@@ -3431,7 +3601,11 @@
     document.getElementById('overlayInspectModal').addEventListener('click', e => { if (e.target.id === 'overlayInspectModal') closeOverlayInspectModal(); });
     document.getElementById('overlayDescModal').addEventListener('click', e => { if (e.target.id === 'overlayDescModal') closeOverlayDescriptionEditor(); });
     document.getElementById('overlayDescInput').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') saveOverlayDescriptionEditor(); });
-    document.getElementById('layoutAlgoSelect').addEventListener('change', e => { layoutAlgorithm = e.target.value; persistCurrentLayout(); if (currentModel && diagramModeEl.value === 'relational') doAutoLayout(); });
+    document.getElementById('layoutAlgoSelect').addEventListener('change', e => {
+      layoutAlgorithm = e.target.value;
+      persistCurrentLayout();
+      if (currentModel) doAutoLayout();
+    });
     document.getElementById('toggleAllOverlayRelationsBtn')?.addEventListener('click', () => {
       showAllOverlayRelations = !showAllOverlayRelations;
       document.getElementById('toggleAllOverlayRelationsBtn').textContent = `🔗 Relaciones overlays: ${showAllOverlayRelations ? 'on' : 'off'}`;
