@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Analizador SQL y Diagramas de Datos v26</title>
+  <title>SQL Visual Reviewer v35</title>
   <style>
     :root {
       --bg: #0b1020; --panel: #121933; --panel-2: #0f1530;
@@ -41,17 +41,25 @@
       --svg-weak-fill: #f8f9ff; --svg-weak-stroke: #5080b8;
     }
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
       margin: 0;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       background: linear-gradient(180deg, var(--body-bg-1) 0%, var(--body-bg-2) 100%);
       color: var(--text);
       transition: background .3s, color .3s;
+      overflow: hidden;
     }
-    .app { display: grid; grid-template-columns: 430px 1fr; min-height: 100vh; gap: 18px; padding: 18px; }
+    .app { display: grid; grid-template-columns: minmax(360px, 430px) minmax(0, 1fr); height: 100vh; gap: 18px; padding: 18px; overflow: hidden; }
     .panel { background: var(--panel); border: 1px solid rgba(122,162,255,.16); border-radius: var(--radius); box-shadow: var(--shadow); backdrop-filter: blur(8px); }
     body.light .panel { border-color: rgba(41,88,220,.18); }
-    .sidebar { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+    .sidebar { padding: 18px; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+    .sidebar > * { flex-shrink: 0; }
+    .sidebar::-webkit-scrollbar, .viewer::-webkit-scrollbar, .canvas-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
+    .sidebar::-webkit-scrollbar-track, .viewer::-webkit-scrollbar-track, .canvas-wrap::-webkit-scrollbar-track { background: transparent; }
+    .sidebar::-webkit-scrollbar-thumb, .viewer::-webkit-scrollbar-thumb, .canvas-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+    .side-titlebar { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .panel-action-btn { width:auto; min-width: 38px; padding: 8px 10px; border-radius: 10px; flex-shrink:0; }
     h1 { margin: 0; font-size: 1.2rem; line-height: 1.2; }
     .subtitle { color: var(--muted); font-size: .95rem; margin-top: 6px; }
     .row { display: grid; gap: 8px; }
@@ -69,14 +77,15 @@
     .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: .82rem; color: var(--muted); }
     .chip { border: 1px solid var(--line); background: rgba(128,128,200,.06); border-radius: 999px; padding: 7px 10px; color: var(--text); }
     .hint { color: var(--muted); font-size: .82rem; margin-top: -4px; }
-    .viewer { display: grid; grid-template-rows: auto auto 1fr auto; min-width: 0; }
-    .toolbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid rgba(122,162,255,.12); flex-wrap: wrap; }
+    .viewer { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
+    .toolbar { position: sticky; top: 0; z-index: 20; display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid rgba(122,162,255,.12); flex-wrap: wrap; background: color-mix(in srgb, var(--panel) 94%, transparent); backdrop-filter: blur(10px); border-radius: var(--radius) var(--radius) 0 0; }
     body.light .toolbar { border-bottom-color: rgba(41,88,220,.12); }
     .toolbar h2 { margin: 0; font-size: 1rem; }
     .meta { color: var(--muted); font-size: .9rem; }
     .toolbar-right { display: flex; gap: 8px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
-    .canvas-wrap { overflow: hidden; padding: 0; min-height: 0; position: relative; }
-    #diagram { width: 100%; min-height: 600px; height: 100%; background: radial-gradient(circle at 1px 1px,var(--svg-dot) 1px,transparent 0); background-size: 24px 24px; border-radius: 18px; touch-action: none; cursor: default; user-select: none; display: block; }
+    .canvas-wrap { overflow: scroll; padding: 0; min-height: 0; position: relative; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; }
+    #diagram { width: 100%; min-width: var(--diagram-w, 1700px); min-height: var(--diagram-h, 1100px); height: 100%; background: radial-gradient(circle at 1px 1px,var(--svg-dot) 1px,transparent 0); background-size: 24px 24px; border-radius: 0; touch-action: none; cursor: grab; user-select: none; display: block; }
+    #diagram.is-panning { cursor: grabbing; }
     .zoom-bar { position: absolute; bottom: 16px; right: 16px; display: flex; gap: 6px; align-items: center; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 5px 10px; backdrop-filter: blur(8px); z-index: 10; }
     .zoom-bar button { width: 28px; height: 28px; padding: 0; border-radius: 8px; font-size: .9rem; display: flex; align-items: center; justify-content: center; border-color: rgba(122,162,255,.2); }
     .zoom-level { color: var(--muted); font-size: .8rem; min-width: 40px; text-align: center; }
@@ -221,8 +230,48 @@
     .table-card.selected-card { filter: drop-shadow(0 0 0 rgba(0,0,0,0)); }
     .table-card.selected-card, .entity-rect.selected-card, .weak-entity-inner.selected-card { stroke: #ffd166; stroke-width: 2.6; }
     .sync-note { font-size:.76rem; color: var(--muted); margin-top: 8px; line-height:1.4; }
+
+    .sidebar:fullscreen, .viewer:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      border-radius: 0;
+      border: 0;
+      box-shadow: none;
+      background: var(--panel);
+    }
+    .sidebar:fullscreen {
+      padding: 22px;
+      overflow-y: auto;
+    }
+    .sidebar:fullscreen textarea {
+      min-height: 58vh;
+      font-size: 14px;
+    }
+    .viewer:fullscreen {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+    .viewer:fullscreen #diagram {
+      min-height: 0;
+      height: 100%;
+    }
+    .viewer:fullscreen .canvas-wrap {
+      min-height: 0;
+      overflow: scroll;
+    }
+    .viewer:fullscreen .toolbar {
+      border-radius: 0;
+    }
+    .is-fullscreen .panel-action-btn, .is-fullscreen .btn-fullscreen {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
     @media (max-width: 1100px) {
-      .app { grid-template-columns: 1fr; }
+      body { overflow: auto; }
+      .app { grid-template-columns: 1fr; height: auto; min-height: 100vh; overflow: visible; }
+      .sidebar, .viewer { max-height: none; overflow: visible; }
+      .viewer { min-height: 760px; }
       #diagram { min-height: 700px; }
     }
   
@@ -275,137 +324,336 @@
     .data-table th, .data-table td { border:1px solid var(--line); padding:8px; text-align:left; vertical-align:top; }
     .data-table th { background: var(--panel-2); }
 
+    /* SQL Visual Reviewer */
+    .review-panel { display:block; margin-top: 12px; }
+    .review-hero { border:1px solid rgba(122,162,255,.22); background: linear-gradient(180deg, rgba(122,162,255,.12), rgba(142,240,193,.06)); border-radius: 16px; padding: 12px; }
+    .review-score-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom: 8px; }
+    .review-score { font-size: 2rem; font-weight: 800; letter-spacing: -.04em; color: var(--text); }
+    .review-score small { font-size: .86rem; color: var(--muted); font-weight: 700; }
+    .review-grade { border:1px solid var(--line); border-radius:999px; padding: 6px 10px; font-size:.78rem; font-weight:800; white-space:nowrap; }
+    .review-grade.good { color: var(--accent-2); border-color: rgba(142,240,193,.5); background: rgba(142,240,193,.10); }
+    .review-grade.medium { color: var(--warn); border-color: rgba(232,160,0,.5); background: rgba(232,160,0,.12); }
+    .review-grade.bad { color: var(--danger); border-color: rgba(255,123,123,.45); background: rgba(255,123,123,.10); }
+    .review-meter { height: 8px; border-radius:999px; background: rgba(255,255,255,.08); overflow:hidden; border:1px solid rgba(255,255,255,.06); }
+    .review-meter span { display:block; height:100%; width:0%; background: linear-gradient(90deg, var(--danger), var(--warn), var(--accent-2)); border-radius:999px; transition: width .25s ease; }
+    .review-summary-grid { display:grid; grid-template-columns: repeat(3,1fr); gap:8px; margin-top:10px; }
+    .review-kpi { border:1px solid var(--line); background: rgba(0,0,0,.08); border-radius: 12px; padding: 8px; }
+    .review-kpi b { display:block; font-size:1.08rem; }
+    .review-kpi span { color: var(--muted); font-size:.72rem; }
+    .review-actions { display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:10px; }
+    .review-actions button { padding: 8px 10px; border-radius: 10px; font-size: .78rem; }
+    .review-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 6px; }
+    .review-tab { width:auto; padding:6px 9px; border-radius:999px; font-size:.74rem; font-weight:800; background: rgba(255,255,255,.04); }
+    .review-tab.active { border-color: var(--accent); color: var(--accent); }
+    .review-list { display:flex; flex-direction:column; gap:8px; max-height: 420px; overflow:auto; padding: 2px 2px 6px; }
+    .review-item { border:1px solid var(--line); background: var(--panel-2); border-radius: 14px; padding: 10px; cursor:pointer; transition: transform .15s ease, border-color .15s ease; }
+    .review-item:hover { transform: translateY(-1px); border-color: var(--accent); }
+    .review-item-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+    .review-title { font-weight:800; font-size:.86rem; line-height:1.25; }
+    .review-meta { color: var(--muted); font-size:.72rem; margin-top:2px; }
+    .review-desc { color: var(--muted); font-size:.78rem; line-height:1.35; margin-top:7px; }
+    .review-fix { margin-top:7px; border-left:3px solid var(--accent); padding-left:8px; color: var(--text); font-size:.78rem; line-height:1.35; }
+    .sev { border-radius:999px; padding:3px 7px; font-size:.68rem; font-weight:900; white-space:nowrap; }
+    .sev.critical { color:#ffd6d6; background:rgba(255,123,123,.22); border:1px solid rgba(255,123,123,.42); }
+    .sev.warning { color:#ffe2a8; background:rgba(232,160,0,.18); border:1px solid rgba(232,160,0,.38); }
+    .sev.info { color:#d8e5ff; background:rgba(122,162,255,.16); border:1px solid rgba(122,162,255,.35); }
+    .review-empty { color: var(--muted); font-size:.82rem; border:1px dashed var(--line); border-radius: 14px; padding: 12px; text-align:center; }
+    body.light .review-hero { background: linear-gradient(180deg, rgba(41,88,220,.09), rgba(10,124,85,.05)); }
+
+    /* ── v31 additions ─────────────────────────────────────────────────────── */
+    .welcome-banner { border: 1px solid rgba(122,162,255,.28); background: linear-gradient(135deg, rgba(41,88,220,.14) 0%, rgba(142,240,193,.07) 100%); border-radius: 14px; padding: 12px 14px; }
+    .welcome-banner h2 { margin: 0 0 5px; font-size: .95rem; color: var(--text); }
+    .welcome-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+    .welcome-step { display: flex; align-items: center; gap: 5px; background: rgba(255,255,255,.05); border: 1px solid rgba(122,162,255,.18); border-radius: 99px; padding: 4px 10px; font-size: .76rem; color: var(--muted); }
+    .welcome-step b { color: var(--accent); }
+    body.light .welcome-banner { background: linear-gradient(135deg, rgba(41,88,220,.1) 0%, rgba(10,124,85,.05) 100%); }
+    body.light .welcome-step { background: rgba(0,0,0,.04); }
+    .adv-section { display: block; flex: 0 0 auto; border: 1px solid rgba(122,162,255,.14); border-radius: 14px; overflow: hidden; }
+    .adv-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; user-select: none; background: rgba(122,162,255,.05); font-size: .84rem; font-weight: 700; color: var(--muted); transition: background .15s; }
+    .adv-header:hover { background: rgba(122,162,255,.1); color: var(--text); }
+    .adv-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+    .adv-body.collapsed { display: none; }
+    .adv-separator { font-size: .7rem; font-weight: 800; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; opacity: .6; margin: 2px 0; }
+    .sql-microcopy { color: var(--muted); font-size: .77rem; line-height: 1.35; margin-top: 2px; }
+    .examples-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-height: 66vh; overflow-y: auto; padding: 2px; }
+    .example-card { border: 1px solid var(--line); background: var(--panel-2); border-radius: 14px; padding: 12px; cursor: pointer; transition: border-color .15s, transform .15s; }
+    .example-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .example-card h4 { margin: 0 0 4px; font-size: .88rem; color: var(--text); }
+    .example-card p { margin: 0 0 6px; font-size: .75rem; color: var(--muted); line-height: 1.35; }
+    .example-badge { display: inline-block; font-size: .63rem; font-weight: 800; border-radius: 99px; padding: 2px 8px; letter-spacing: .04em; }
+    .example-badge.correct { background: rgba(142,240,193,.18); color: #8ef0c1; border: 1px solid rgba(142,240,193,.35); }
+    .example-badge.errors  { background: rgba(255,123,123,.15); color: #ffa0a0; border: 1px solid rgba(255,123,123,.32); }
+    .example-badge.educational { background: rgba(122,162,255,.16); color: var(--accent); border: 1px solid rgba(122,162,255,.3); }
+    .example-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .example-tag { font-size: .63rem; color: var(--muted); background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 99px; padding: 1px 6px; }
+    body.light .example-tag { background: rgba(0,0,0,.04); }
+    .review-disclaimer { font-size: .72rem; color: var(--muted); line-height: 1.4; border-left: 3px solid rgba(122,162,255,.3); padding-left: 8px; margin-top: 7px; }
+    .index-tuning { margin-top: 10px; border:1px solid rgba(122,162,255,.16); background: rgba(122,162,255,.045); border-radius: 12px; padding: 10px; display:grid; gap:8px; }
+    .index-tuning-title { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:.76rem; color:var(--muted); font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+    .index-tuning-grid { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+    .index-tuning select { padding: 8px 10px; border-radius: 10px; font-size:.78rem; }
+    .index-tuning label { font-size:.72rem; }
+    .index-toggle { display:flex; align-items:flex-start; gap:8px; color:var(--muted); font-size:.74rem; line-height:1.35; }
+    .index-toggle input { width:14px; height:14px; margin-top:2px; accent-color:var(--accent); flex-shrink:0; }
+    .index-tuning-help { color: var(--muted); font-size:.72rem; line-height:1.35; }
+    body.light .index-tuning { background: rgba(41,88,220,.045); }
+    .review-natural-summary { font-size: .79rem; color: var(--text); line-height: 1.45; background: rgba(122,162,255,.07); border: 1px solid rgba(122,162,255,.14); border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+    .review-item-extra { margin-top: 7px; border-top: 1px solid rgba(122,162,255,.1); padding-top: 7px; display: none; }
+    .review-item-extra.open { display: block; }
+    .review-why { font-size: .75rem; color: var(--muted); line-height: 1.35; margin-bottom: 5px; }
+    .review-why b { color: var(--text); }
+    .review-fp { font-size: .72rem; color: rgba(255,200,80,.85); background: rgba(255,159,67,.07); border: 1px solid rgba(255,159,67,.18); border-radius: 8px; padding: 5px 7px; margin-bottom: 5px; }
+    .review-sql-ex { background: rgba(0,0,0,.2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-family: ui-monospace, monospace; font-size: .72rem; color: var(--accent); white-space: pre-wrap; word-break: break-all; margin-top: 3px; }
+    body.light .review-sql-ex { background: rgba(0,0,0,.05); color: #2958dc; }
+    .review-expand-btn { background: none; border: none; color: var(--accent); font-size: .71rem; font-weight: 700; cursor: pointer; padding: 3px 0 0; width: auto; text-decoration: underline; text-underline-offset: 2px; }
+    .about-panel { border: 1px solid rgba(122,162,255,.14); background: rgba(122,162,255,.03); border-radius: 14px; padding: 10px 12px; }
+    .about-panel h3 { margin: 0 0 3px; font-size: .83rem; color: var(--text); }
+    .about-panel p, .about-panel li { font-size: .76rem; color: var(--muted); margin: 2px 0; line-height: 1.4; }
+    .about-panel details summary { cursor: pointer; font-weight: 700; font-size: .79rem; color: var(--muted); user-select: none; }
+    .about-panel details[open] summary { color: var(--text); }
+    .about-panel ul { padding-left: 14px; margin: 4px 0; }
+
+
+    /* ── v34: Advanced advisor + SQL converter ─────────────────────────────── */
+    .advisor-panel, .converter-panel { border: 1px solid rgba(122,162,255,.16); background: rgba(122,162,255,.035); border-radius: 14px; padding: 10px 12px; }
+    .advisor-panel h3, .converter-panel h3 { margin: 0 0 6px; font-size: .86rem; color: var(--text); }
+    .advisor-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+    .advisor-chip { border: 1px solid var(--line); background: var(--panel-2); border-radius: 12px; padding: 8px; font-size: .74rem; color: var(--muted); line-height: 1.35; }
+    .advisor-chip b { display:block; color: var(--text); font-size: .77rem; margin-bottom: 2px; }
+    .converter-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+    .converter-actions { display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 8px 0; }
+    .converter-output { min-height: 220px; max-height: 52vh; resize: vertical; font-size: 12.5px; }
+    .converter-note { color: var(--muted); font-size: .72rem; line-height: 1.4; margin-top: 6px; }
+    @media (max-width: 560px) { .advisor-grid, .converter-grid, .converter-actions { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <div class="app">
-    <aside class="panel sidebar">
-      <div>
-        <h1>Analizador SQL → Diagramas relacionales y E/R v27</h1>
-        <div class="subtitle">Esquema relacional y diagrama entidad-relación con rombos, entidades débiles y atributos editables.</div>
+    <aside class="panel sidebar" id="sidebarPanel">
+      <div class="side-titlebar">
+        <div>
+          <h1>SQL Visual Reviewer v35</h1>
+          <div class="subtitle">Revisa modelos SQL generados por IA: diagrama, puntuación, problemas, recomendaciones y documentación exportable.</div>
+        </div>
+        <button class="btn-ghost panel-action-btn" id="sidebarFullscreenBtn" title="Pantalla completa del panel lateral" type="button">⛶</button>
       </div>
 
-      <div class="grid-2">
-        <div class="row">
-          <label for="diagramMode">Modo de diagrama</label>
-          <select id="diagramMode">
-            <option value="relational">Relaciones entre tablas</option>
-            <option value="conceptual">Entidad-Relación conceptual</option>
-          </select>
-        </div>
-        <div class="row">
-          <label for="dialect">Perfil</label>
-          <select id="dialect">
-            <option value="mysql">MySQL</option>
-            <option value="workbench">MySQL Workbench</option>
-            <option value="oracle">Oracle / FreeSQL</option>
-          </select>
+      <!-- Welcome banner: visible flow for new users -->
+      <div class="welcome-banner">
+        <h2>🚀 ¿Para qué sirve esta herramienta?</h2>
+        <div style="font-size:.78rem;color:var(--muted);line-height:1.4">Pega un SQL con tablas y relaciones para obtener un diagrama visual, detectar problemas de diseño y exportar documentación. Especialmente útil para revisar SQL generado por IA.</div>
+        <div class="welcome-steps">
+          <span class="welcome-step"><b>1</b> Pega tu SQL</span>
+          <span class="welcome-step"><b>2</b> Pulsa "Analizar modelo"</span>
+          <span class="welcome-step"><b>3</b> Revisa problemas</span>
+          <span class="welcome-step"><b>4</b> Exporta informe</span>
         </div>
       </div>
 
-      <div class="grid-2">
-        <div class="row">
-          <label for="naming">Convención relacional</label>
-          <select id="naming">
-            <option value="crow">Crow's Foot simplificada</option>
-            <option value="minmax">Min..Max (1, N)</option>
-          </select>
+      <!-- Advanced options collapsible -->
+      <div class="adv-section" id="advSection">
+        <div class="adv-header" id="advHeader" onclick="toggleAdv()">
+          <span>⚙️ Opciones avanzadas</span>
+          <span id="advChevron">▸</span>
         </div>
-        <div class="row">
-          <label for="fieldMode">Campos visibles</label>
-          <select id="fieldMode">
-            <option value="all">Todos los campos</option>
-            <option value="keys">Solo PK y FK</option>
-          </select>
+        <div class="adv-body collapsed" id="advBody">
+          <div class="adv-separator">Diagrama y visualización</div>
+          <div class="grid-2">
+            <div class="row">
+              <label for="diagramMode">Modo de diagrama</label>
+              <select id="diagramMode">
+                <option value="relational">Relaciones entre tablas</option>
+                <option value="conceptual">Entidad-Relación conceptual</option>
+              </select>
+            </div>
+            <div class="row">
+              <label for="dialect">Perfil SQL</label>
+              <select id="dialect">
+                <option value="mysql">MySQL</option>
+                <option value="workbench">MySQL Workbench</option>
+                <option value="oracle">Oracle / FreeSQL</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="row">
+              <label for="naming">Convención relacional</label>
+              <select id="naming">
+                <option value="crow">Crow's Foot simplificada</option>
+                <option value="minmax">Min..Max (1, N)</option>
+              </select>
+            </div>
+            <div class="row">
+              <label for="fieldMode">Campos visibles</label>
+              <select id="fieldMode">
+                <option value="all">Todos los campos</option>
+                <option value="keys">Solo PK y FK</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="adv-separator">Modo de trabajo</div>
+          <div class="grid-2">
+            <div class="row">
+              <label for="workMode">Modo de trabajo</label>
+              <select id="workMode">
+                <option value="analyze">Analizar SQL</option>
+                <option value="edit">Edición bidireccional</option>
+              </select>
+            </div>
+            <div class="row">
+              <label for="syncMode">Sincronización</label>
+              <select id="syncMode">
+                <option value="auto">Auto al editar</option>
+                <option value="manual">Manual</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Entity selector panel (conceptual mode only) -->
+          <div class="side-panel" id="entitySelectorPanel">
+            <div class="side-panel-header" id="entitySelectorToggle">
+              <span>🗂 Entidades visibles</span>
+              <span id="entitySelectorChevron">▾</span>
+            </div>
+            <div class="side-panel-body" id="entitySelectorBody"></div>
+            <div class="sel-actions" id="selActions" style="display:none">
+              <button class="btn-ghost" id="selAllBtn">Todas</button>
+              <button class="btn-ghost" id="selNoneBtn">Ninguna</button>
+              <button class="btn-ghost" id="selStrongBtn">Solo fuertes</button>
+            </div>
+          </div>
+
+          <!-- Relation name editor panel (conceptual mode only) -->
+          <div class="side-panel" id="relEditorPanel">
+            <div class="side-panel-header" id="relEditorToggle">
+              <span>✏️ Nombres de relaciones</span>
+              <span id="relEditorChevron">▾</span>
+            </div>
+            <div class="side-panel-body" id="relEditorBody"></div>
+          </div>
+
+          <div class="side-panel schema-panel" id="schemaEditorPanel">
+            <div class="side-panel-header">
+              <span>🛠 Editor del modelo</span>
+              <span id="schemaEditorBadge">SQL ↔ tablas</span>
+            </div>
+            <div class="side-panel-body" id="schemaEditorBody"></div>
+            <div class="sync-note">En modo edición puedes crear tablas, campos y claves foráneas. El diagrama se vuelve a dibujar y el SQL se regenera para mantener la coherencia.</div>
+          </div>
+
+          <div class="adv-separator">Exportación y utilidades</div>
+          <div class="button-grid">
+            <button class="btn-ghost" id="syncFromSqlBtn">SQL → modelo</button>
+            <button class="btn-ghost" id="syncToSqlBtn">Modelo → SQL</button>
+            <button class="btn-ghost" id="saveLayoutBtn">Guardar layout</button>
+            <button class="btn-ghost" id="resetLayoutBtn">Reset layout</button>
+            <button class="btn-ghost" id="exportSvgBtn">Exportar SVG</button>
+            <button class="btn-ghost" id="exportPngBtn">Exportar PNG</button>
+            <button class="btn-ghost" id="exportPdfBtn">Informe PDF</button>
+            <button class="btn-ghost" id="exportMdBtn">Informe MD</button>
+            <button class="btn-ghost" id="commentSqlBtn">Comentar SQL</button>
+            <button class="btn-ghost" id="restoreSqlBtn">Ver SQL limpio</button>
+            <button class="btn-ghost" id="downloadCommentedSqlBtn">Descargar SQL comentado</button>
+            <button class="btn-ghost" id="downloadCleanSqlBtn">Descargar SQL limpio</button>
+          </div>
+          <div class="schema-tools" id="schemaTools" style="display:none">
+            <button class="btn-ghost" id="addTableBtn">＋ Nueva tabla</button>
+            <button class="btn-ghost" id="addRelationBtn">🔗 Nueva relación</button>
+          </div>
+
+          <div class="legend">
+            <span class="chip">Rectángulo = entidad fuerte</span>
+            <span class="chip" style="border-color:rgba(74,122,184,.6);color:#74b9ff">Doble borde = entidad débil</span>
+            <span class="chip">Rombo = relación</span>
+            <span class="chip" style="border-color:rgba(74,122,184,.6);color:#74b9ff">Doble rombo = relación identificadora</span>
+            <span class="chip">Elipse = atributo · <u>subrayado</u> = PK</span>
+          </div>
+          <div class="hint">Modo conceptual: selecciona entidades visibles con el panel de arriba. Edita nombres de relaciones en el panel o con doble clic sobre el rombo.</div>
         </div>
       </div>
 
+      <section class="review-panel" id="reviewPanel">
+        <div class="side-panel-header"><span>🧠 Revisión del modelo</span><span id="reviewBadge">Sin analizar</span></div>
+        <div class="review-hero" id="reviewHero">
+          <div class="review-score-row"><div class="review-score">--<small>/100</small></div><div class="review-grade medium">Pega SQL</div></div>
+          <div class="review-meter"><span style="width:0%"></span></div>
+          <div class="review-summary-grid"><div class="review-kpi"><b>0</b><span>Críticos</span></div><div class="review-kpi"><b>0</b><span>Avisos</span></div><div class="review-kpi"><b>0</b><span>Mejoras</span></div></div>
+          <div class="review-disclaimer">Revisión heurística: puede haber falsos positivos. No sustituye una revisión técnica completa.</div>
+          <div class="index-tuning" id="indexTuningPanel">
+            <div class="index-tuning-title"><span>🎚️ Sensibilidad de índices</span><span id="indexTuningBadge">Equilibrado</span></div>
+            <div class="index-tuning-grid">
+              <div class="row"><label for="indexDbSize">Tamaño estimado</label><select id="indexDbSize"><option value="small">Pequeña / académica</option><option value="medium" selected>Media / producción inicial</option><option value="large">Grande</option><option value="huge">Muy grande / histórica</option></select></div>
+              <div class="row"><label for="indexSensitivity">Criterio</label><select id="indexSensitivity"><option value="conservative">Conservador</option><option value="balanced" selected>Equilibrado</option><option value="aggressive">Agresivo</option></select></div>
+            </div>
+            <label class="index-toggle"><input type="checkbox" id="indexOnlyEvidence" checked><span>Recomendar índices compuestos solo si hay evidencia en consultas, vistas o patrones temporales fuertes.</span></label>
+            <div class="index-tuning-help">Reduce falsos positivos: una FK ya indexada no necesita automáticamente más índices compuestos. Valida siempre con <code>EXPLAIN</code> y volumen real.</div>
+          </div>
+        </div>
+        <div id="reviewNaturalSummary"></div>
+        <div class="review-actions"><button class="btn-ghost" id="copyReviewBtn">Copiar resumen</button><button class="btn-ghost" id="downloadReviewBtn">Descargar informe</button></div>
+        <div class="review-tabs" id="reviewTabs"></div>
+        <div class="review-list" id="reviewList"><div class="review-empty">Analiza un SQL para ver problemas de diseño, recomendaciones e índices sugeridos.</div></div>
+      </section>
 
-      <div class="grid-2">
-        <div class="row">
-          <label for="workMode">Modo de trabajo</label>
-          <select id="workMode">
-            <option value="analyze">Analizar SQL</option>
-            <option value="edit">Edición bidireccional</option>
-          </select>
-        </div>
-        <div class="row">
-          <label for="syncMode">Sincronización</label>
-          <select id="syncMode">
-            <option value="auto">Auto al editar</option>
-            <option value="manual">Manual</option>
-          </select>
-        </div>
-      </div>
 
-      <!-- Entity selector panel (conceptual mode only) -->
-      <div class="side-panel" id="entitySelectorPanel">
-        <div class="side-panel-header" id="entitySelectorToggle">
-          <span>🗂 Entidades visibles</span>
-          <span id="entitySelectorChevron">▾</span>
-        </div>
-        <div class="side-panel-body" id="entitySelectorBody">
-          <!-- populated by JS after analysis -->
-        </div>
-        <div class="sel-actions" id="selActions" style="display:none">
-          <button class="btn-ghost" id="selAllBtn">Todas</button>
-          <button class="btn-ghost" id="selNoneBtn">Ninguna</button>
-          <button class="btn-ghost" id="selStrongBtn">Solo fuertes</button>
-        </div>
-      </div>
 
-      <!-- Relation name editor panel (conceptual mode only) -->
-      <div class="side-panel" id="relEditorPanel">
-        <div class="side-panel-header" id="relEditorToggle">
-          <span>✏️ Nombres de relaciones</span>
-          <span id="relEditorChevron">▾</span>
+      <section class="advisor-panel" id="advisorPanel">
+        <h3>🔎 Preguntas avanzadas que responde la revisión</h3>
+        <div class="sql-microcopy">Al analizar el modelo se añaden avisos específicos para estas cuatro áreas. Úsalos como checklist de revisión técnica.</div>
+        <div class="advisor-grid">
+          <div class="advisor-chip"><b>FKs y cardinalidad</b>Detecta campos tipo id_* sin FOREIGN KEY y propone 0..N, 1..N, 0..1 o 1..1 según nulabilidad y unicidad.</div>
+          <div class="advisor-chip"><b>Índices frecuentes</b>Sugiere índices para FKs, búsquedas por estado/fecha, tablas de historial y combinaciones típicas de consulta.</div>
+          <div class="advisor-chip"><b>Normalización</b>Marca tablas demasiado anchas o con grupos de columnas de responsabilidades distintas.</div>
+          <div class="advisor-chip"><b>Tipos de dato</b>Revisa fechas como texto, booleanos como texto, importes imprecisos e identificadores incompatibles.</div>
         </div>
-        <div class="side-panel-body" id="relEditorBody">
-          <!-- populated by JS after analysis -->
-        </div>
-      </div>
+      </section>
 
-      <div class="side-panel schema-panel" id="schemaEditorPanel">
-        <div class="side-panel-header">
-          <span>🛠 Editor del modelo</span>
-          <span id="schemaEditorBadge">SQL ↔ tablas</span>
+      <section class="converter-panel" id="sqlConverterPanel">
+        <h3>🔁 Conversor SQL entre bases de datos</h3>
+        <div class="sql-microcopy">Conversión heurística local para DDL básico: tipos, autoincrementos, comillas, índices y detalles frecuentes. Revisa siempre el resultado antes de usarlo en producción.</div>
+        <div class="converter-grid">
+          <div class="row"><label for="converterSource">Origen</label><select id="converterSource"><option value="mysql">MySQL / MariaDB</option><option value="postgresql">PostgreSQL</option><option value="sqlserver">SQL Server</option><option value="oracle">Oracle</option><option value="sqlite">SQLite</option></select></div>
+          <div class="row"><label for="converterTarget">Destino</label><select id="converterTarget"><option value="postgresql">PostgreSQL</option><option value="mysql">MySQL / MariaDB</option><option value="sqlserver">SQL Server</option><option value="oracle">Oracle</option><option value="sqlite">SQLite</option></select></div>
         </div>
-        <div class="side-panel-body" id="schemaEditorBody"></div>
-        <div class="sync-note">En modo edición puedes crear tablas, campos y claves foráneas. El diagrama se vuelve a dibujar y el SQL se regenera para mantener la coherencia.</div>
-      </div>
+        <div class="converter-actions"><button class="btn-ghost" id="convertSqlBtn" type="button">Convertir SQL</button><button class="btn-ghost" id="copyConvertedSqlBtn" type="button">Copiar</button><button class="btn-ghost" id="downloadConvertedSqlBtn" type="button">Descargar</button></div>
+        <textarea id="convertedSqlOutput" class="converter-output" spellcheck="false" placeholder="Aquí aparecerá el SQL convertido..."></textarea>
+        <div class="converter-note" id="converterWarnings">Soporta conversión aproximada de CREATE TABLE, ALTER TABLE, índices y tipos comunes. No convierte lógica procedural compleja al 100%.</div>
+      </section>
 
+      <!-- SQL input area -->
       <div class="row">
         <label for="sqlInput">Script SQL</label>
-        <textarea id="sqlInput" spellcheck="false"></textarea>
+        <div class="sql-microcopy">Pega aquí un script CREATE TABLE con claves primarias y foráneas. También puedes cargar un ejemplo.</div>
+        <textarea id="sqlInput" spellcheck="false" placeholder="CREATE TABLE usuarios (&#10;  id_usuario INT PRIMARY KEY,&#10;  email VARCHAR(100) UNIQUE NOT NULL,&#10;  ...&#10;);&#10;&#10;CREATE TABLE pedidos (&#10;  id_pedido INT PRIMARY KEY,&#10;  id_usuario INT NOT NULL,&#10;  FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)&#10;);"></textarea>
       </div>
 
-      <div class="button-grid">
-        <button class="btn-primary" id="analyzeBtn">Analizar y dibujar</button>
-        <button class="btn-ghost" id="syncFromSqlBtn">SQL → modelo</button>
-        <button class="btn-ghost" id="syncToSqlBtn">Modelo → SQL</button>
-        <button class="btn-ghost" id="sampleBtn">Cargar ejemplo</button>
-        <button class="btn-ghost" id="saveLayoutBtn">Guardar layout</button>
-          <button class="btn-ghost" id="resetLayoutBtn">Reset layout</button>
-          <button class="btn-ghost" id="exportSvgBtn">Exportar SVG</button>
-        <button class="btn-ghost" id="clearBtn">Limpiar</button>
-      </div>
-      <div class="schema-tools" id="schemaTools" style="display:none">
-        <button class="btn-ghost" id="addTableBtn">＋ Nueva tabla</button>
-        <button class="btn-ghost" id="addRelationBtn">🔗 Nueva relación</button>
+      <!-- Primary actions (always visible) -->
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn-primary" id="analyzeBtn" style="padding:13px;font-size:.96rem">🔍 Analizar modelo</button>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button class="btn-ghost" id="sampleBtn">📂 Cargar ejemplo</button>
+          <button class="btn-ghost" id="clearBtn">🗑 Limpiar</button>
+        </div>
       </div>
 
-      <div class="legend">
-        <span class="chip">Rectángulo = entidad fuerte</span>
-        <span class="chip" style="border-color:rgba(74,122,184,.6);color:#74b9ff">Doble borde = entidad débil</span>
-        <span class="chip">Rombo = relación</span>
-        <span class="chip" style="border-color:rgba(74,122,184,.6);color:#74b9ff">Doble rombo = relación identificadora</span>
-        <span class="chip">Elipse = atributo · <u>subrayado</u> = PK</span>
-        <span class="chip" style="border-color:rgba(255,159,67,.5);color:#ff9f43">Línea coloreada = cruce o color PK/FK</span>
+      <!-- About/Limitations -->
+      <div class="about-panel">
+        <details>
+          <summary>ℹ️ Acerca de esta herramienta y limitaciones</summary>
+          <p style="margin-top:6px">Convierte modelos SQL en diagramas visuales, detecta problemas comunes y genera documentación exportable. Especialmente diseñada para revisar SQL generado por IA.</p>
+          <ul>
+            <li>No cubre todos los dialectos SQL ni toda la sintaxis posible.</li>
+            <li>Puede generar falsos positivos en modelos con convenciones no estándar.</li>
+            <li>Los resultados dependen de que el SQL tenga claves y relaciones declaradas.</li>
+            <li>No sustituye una revisión de base de datos profesional.</li>
+          </ul>
+        </details>
       </div>
-      <div class="hint">Modo conceptual: selecciona entidades visibles con el panel de arriba. Edita nombres de relaciones en el panel o con doble clic sobre el rombo.</div>
     </aside>
 
-    <main class="panel viewer">
+    <main class="panel viewer" id="viewerPanel">
       <div class="toolbar">
         <div>
           <h2>Diagrama</h2>
@@ -414,6 +662,7 @@
         <div class="toolbar-right">
           <div id="crossingInfo" style="display:none"></div>
           <button class="btn-theme" id="themeBtn" title="Cambiar tema">🌙</button>
+          <button class="btn-ghost btn-small btn-fullscreen" id="diagramFullscreenBtn" title="Pantalla completa del diagrama">⛶ Diagrama</button>
           <button class="btn-ghost btn-small" id="inspectSelectionBtn">🧾 Ver código</button>
           <button class="btn-ghost btn-small" id="inspectDataBtn">📋 Ver datos</button>
           <button class="btn-ghost btn-small" id="colorRelBtn">🎨 Colores PK/FK</button>
@@ -505,7 +754,34 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="examplesModal">
+    <div class="modal-card" style="max-width:min(860px,94vw)">
+      <div class="modal-head">
+        <div>
+          <h3 style="margin:0">📂 Ejemplos SQL</h3>
+          <div class="mini-sub" style="margin-top:3px">Selecciona un ejemplo para cargarlo en el editor. Los marcados como "con errores" están diseñados para demostrar qué detecta el revisor.</div>
+        </div>
+        <button class="modal-close btn-ghost" id="examplesModalClose">Cerrar</button>
+      </div>
+      <div class="examples-grid" id="examplesGrid"></div>
+    </div>
+  </div>
+
 <script>
+
+  // ── v31 Advanced panel toggle ────────────────────────────────────────────────
+  function toggleAdv() {
+    const body = document.getElementById('advBody');
+    const chevron = document.getElementById('advChevron');
+    if (!body) return;
+    const collapsed = body.classList.toggle('collapsed');
+    if (chevron) chevron.textContent = collapsed ? '▸' : '▾';
+  }
+  window.toggleAdv = toggleAdv;
+  document.addEventListener('DOMContentLoaded', () => {
+    const advSection = document.getElementById('advSection');
+    if (advSection) advSection.style.display = 'block';
+  });
 
   (() => {
     const sqlInput     = document.getElementById('sqlInput');
@@ -522,6 +798,10 @@
     const schemaEditorPanel = document.getElementById('schemaEditorPanel');
     const schemaEditorBody  = document.getElementById('schemaEditorBody');
     const schemaTools       = document.getElementById('schemaTools');
+    const reviewHero        = document.getElementById('reviewHero');
+    const reviewTabs        = document.getElementById('reviewTabs');
+    const reviewList        = document.getElementById('reviewList');
+    const reviewBadge       = document.getElementById('reviewBadge');
 
     // ── State ────────────────────────────────────────────────────────────────
     let currentModel     = null;
@@ -536,6 +816,11 @@
     let selectedTableName = null;
     let selectedConceptualRelationId = null;
     let currentProcedures = [];
+    let currentReview = null;
+    let activeReviewFilter = 'all';
+    let cleanSqlSnapshot = '';
+    let commentedSqlSnapshot = '';
+    let showingCommentedSql = false;
     let procedurePositions = new Map();
     let procedureDescriptionOverrides = new Map();
     let visibilityState = { tables:true, views:true, triggers:true, procedures:true };
@@ -667,6 +952,15 @@
       const s = Math.min(1, (vw/maxX)*0.93, (vh/maxY)*0.93);
       zoom = { scale:s, tx:16*s, ty:16*s }; applyZoom();
     }
+    function syncDiagramCanvasSize(width, height) {
+      const w = Math.max(960, Math.ceil(width || diagram.viewBox.baseVal.width || 1700));
+      const h = Math.max(650, Math.ceil(height || diagram.viewBox.baseVal.height || 1100));
+      diagram.style.setProperty('--diagram-w', w + 'px');
+      diagram.style.setProperty('--diagram-h', h + 'px');
+      diagram.style.width = Math.max(w, diagram.parentElement?.clientWidth || 0) + 'px';
+      diagram.style.height = Math.max(h, diagram.parentElement?.clientHeight || 0) + 'px';
+    }
+    window.syncDiagramCanvasSize = syncDiagramCanvasSize;
     diagram.addEventListener('wheel', evt => {
       evt.preventDefault();
       zoomAt(evt.clientX, evt.clientY, evt.deltaY < 0 ? 1.12 : 1/1.12);
@@ -677,7 +971,8 @@
       const pt = diagram.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;
       const sp = pt.matrixTransform(diagram.getScreenCTM().inverse());
       panState = {sx:sp.x, sy:sp.y, otx:zoom.tx, oty:zoom.ty};
-      diagram.style.cursor='grabbing'; diagram.setPointerCapture(evt.pointerId);
+      diagram.classList.add('is-panning');
+      try { diagram.setPointerCapture(evt.pointerId); } catch (_) {}
     });
     diagram.addEventListener('pointermove', evt => {
       if (!panState) return;
@@ -686,7 +981,7 @@
       zoom.tx = panState.otx + (sp.x - panState.sx);
       zoom.ty = panState.oty + (sp.y - panState.sy); applyZoom();
     });
-    const endPan = () => { panState=null; diagram.style.cursor='default'; };
+    const endPan = () => { panState=null; diagram.classList.remove('is-panning'); };
     diagram.addEventListener('pointerup', endPan);
     diagram.addEventListener('pointercancel', endPan);
     let _ltd = null;
@@ -697,6 +992,7 @@
     document.getElementById('zoomInBtn').addEventListener('click',    ()=>{ const c=diagramCenter(); zoomAt(c.x,c.y,1.3); });
     document.getElementById('zoomOutBtn').addEventListener('click',   ()=>{ const c=diagramCenter(); zoomAt(c.x,c.y,1/1.3); });
     document.getElementById('zoomResetBtn').addEventListener('click', resetZoom);
+    syncDiagramCanvasSize(1700, 1100);
     // ── End zoom ──────────────────────────────────────────────────────────────
 
     // ── Palettes ─────────────────────────────────────────────────────────────
@@ -784,11 +1080,41 @@
       }
       return blocks;
     }
+    function extractAlterTableForeignKeys(sql) {
+      const cleaned = stripComments(sql || '');
+      const fks = [];
+      const re = /ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?((?:[`"\[]?[\w$#]+[`"\]]?\.)?[`"\[]?[\w$#]+[`"\]]?)\s+ADD\s+(?:CONSTRAINT\s+([`"\[]?[\w$#]+[`"\]]?)\s+)?FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+((?:[`"\[]?[\w$#]+[`"\]]?\.)?[`"\[]?[\w$#]+[`"\]]?)\s*\(([^)]+)\)/gi;
+      let m;
+      while ((m = re.exec(cleaned))) {
+        fks.push({
+          table: cleanIdentifier(m[1]).split('.').pop(),
+          constraint: m[2] ? cleanIdentifier(m[2]) : null,
+          columns: m[3].split(',').map(cleanIdentifier),
+          refTable: cleanIdentifier(m[4]).split('.').pop(),
+          refColumns: m[5].split(',').map(cleanIdentifier)
+        });
+      }
+      return fks;
+    }
+
+    function isAuditOrHistoryTable(table) {
+      const name = normalizeNameKey(table?.name || '');
+      const cols = (table?.columns || []).map(c => normalizeNameKey(c.name));
+      const hasAuditName = /(historial|historico|history|log|audit|auditoria|registro|bitacora|evento|event)/i.test(name);
+      const hasTemporalColumn = cols.some(c => /(fecha|date|created|updated|timestamp|cambio|change|created_at|updated_at)/i.test(c));
+      const hasStateTransition = cols.some(c => /(estado_anterior|estado_prev|old_estado|old_state|previous_state|from_state)/i.test(c))
+        && cols.some(c => /(estado_nuevo|estado_new|new_estado|new_state|to_state)/i.test(c));
+      const hasSurrogatePk = (table?.primaryKey || []).length === 1 && cols.some(c => /(id_historial|id_historico|id_log|id_audit|id_auditoria|id_registro|id_evento|id_event)/i.test(c));
+      return !!(hasAuditName || hasStateTransition || (hasSurrogatePk && hasTemporalColumn));
+    }
     function detectBridgeTable(table) {
       const fkCount = table.foreignKeys.length;
+      if (isAuditOrHistoryTable(table)) return false;
       const nonKeyCols = table.columns.filter(c=>!c.isPk && !c.isFk).length;
+      const descriptiveCols = table.columns.filter(c => !c.isPk && !c.isFk && !/(cantidad|quantity|precio|price|coste|cost|importe|amount|orden|position|fecha|date|created|updated|nota|note|descripcion|description)/i.test(c.name)).length;
       const hasCompositeUniqueOnFks = table.uniqueConstraints.some(cols => cols.length>=2 && cols.every(col=>table.foreignKeys.some(fk=>fk.columns.includes(col))));
-      return fkCount>=2 && (nonKeyCols<=3 || hasCompositeUniqueOnFks);
+      const hasCompositePkOnFks = (table.primaryKey || []).length >= 2 && (table.primaryKey || []).every(col => table.foreignKeys.some(fk => fk.columns.includes(col)));
+      return fkCount>=2 && (hasCompositePkOnFks || hasCompositeUniqueOnFks || (nonKeyCols<=3 && descriptiveCols<=1));
     }
     function parseCreateTables(sql, dialect) {
       const blocks = extractCreateTableBlocks(sql), tables = [];
@@ -820,14 +1146,33 @@
         table.isBridge = detectBridgeTable(table);
         tables.push(table);
       }
+      const tableByName = new Map(tables.map(t => [normalizeNameKey(t.name), t]));
+      extractAlterTableForeignKeys(sql).forEach(fk => {
+        const table = tableByName.get(normalizeNameKey(fk.table));
+        if (!table) return;
+        const exists = (table.foreignKeys || []).some(existing =>
+          normalizeNameKey(existing.refTable) === normalizeNameKey(fk.refTable) &&
+          (existing.columns || []).map(normalizeNameKey).join('|') === fk.columns.map(normalizeNameKey).join('|') &&
+          (existing.refColumns || []).map(normalizeNameKey).join('|') === fk.refColumns.map(normalizeNameKey).join('|')
+        );
+        if (!exists) table.foreignKeys.push({columns:fk.columns, refTable:fk.refTable, refColumns:fk.refColumns, constraint:fk.constraint, source:'alter'});
+      });
+      tables.forEach(table => {
+        table.columns = table.columns.map(col => ({...col, isFk: !!col.isFk || (table.foreignKeys || []).some(fk => (fk.columns || []).some(c => normalizeNameKey(c) === normalizeNameKey(col.name)))}));
+        table.isBridge = detectBridgeTable(table);
+      });
       return { dialect, tables };
     }
     function buildRelations(model) {
-      const tableMap = new Map(model.tables.map(t=>[t.name,t]));
+      const tableMap = new Map(model.tables.map(t=>[normalizeNameKey(t.name),t]));
       const relations = [];
+      const relationSeen = new Set();
       for (const table of model.tables) {
         for (const fk of table.foreignKeys) {
-          const parent = tableMap.get(fk.refTable); if(!parent) continue;
+          const parent = tableMap.get(normalizeNameKey(fk.refTable)); if(!parent) continue;
+          const relationKey = [normalizeNameKey(table.name), normalizeNameKey(parent.name), (fk.columns||[]).map(normalizeNameKey).join('|'), (fk.refColumns||[]).map(normalizeNameKey).join('|')].join('::');
+          if (relationSeen.has(relationKey)) continue;
+          relationSeen.add(relationKey);
           const fkCols = table.columns.filter(c=>fk.columns.includes(c.name));
           const allNotNull = fkCols.length>0 && fkCols.every(c=>c.isNullable===false);
           const compositeUnique = table.uniqueConstraints.some(cols=>cols.length===fk.columns.length && cols.every(col=>fk.columns.includes(col)));
@@ -1206,6 +1551,7 @@
 
       saveRelationalLayout(laidOut);
       diagram.setAttribute('viewBox',`0 0 ${maxX} ${maxY}`);
+      syncDiagramCanvasSize(maxX, maxY);
       attachDraggingRelational(laidOut);
       if (!_hasFitRelational) { fitContent(maxX, maxY); _hasFitRelational = true; }
     }
@@ -1274,6 +1620,7 @@
       const nextHeight = Math.max(vb.height || 0, (minHeight || 0) + padding, 900);
       if (nextWidth > (vb.width || 0) || nextHeight > (vb.height || 0)) {
         diagram.setAttribute('viewBox', `0 0 ${nextWidth} ${nextHeight}`);
+        syncDiagramCanvasSize(nextWidth, nextHeight);
       }
     }
 
@@ -1554,6 +1901,7 @@
 
       saveConceptualLayout(entities, relationships);
       diagram.setAttribute('viewBox',`0 0 ${maxX} ${maxY}`);
+      syncDiagramCanvasSize(maxX, maxY);
       attachDraggingConceptual(entities, relationships);
       if (!_hasFitConceptual) { fitContent(maxX, maxY); _hasFitConceptual = true; }
     }
@@ -2207,7 +2555,7 @@
         summaryEl.textContent = 'Sin análisis todavía.';
         return;
       }
-      summaryEl.textContent = `${currentModel.tables.length} tabla(s) · ${currentRelations.length} relación(es) · ${currentConceptual?.relations?.length || 0} relación(es) conceptuales · ${currentViews.length} vista(s) · ${currentTriggers.length} trigger(s) · ${currentProcedures.length} procedure(s)`;
+      summaryEl.textContent = `${currentModel.tables.length} tabla(s) · ${currentRelations.length} relación(es) · ${currentConceptual?.relations?.length || 0} relación(es) conceptuales · ${currentViews.length} vista(s) · ${currentTriggers.length} trigger(s) · ${currentProcedures.length} procedure(s)` + (currentReview ? ` · calidad ${currentReview.score}/100` : '');
     }
     function generateSqlFromModel(model) {
       if (!model || !model.tables?.length) return '';
@@ -2239,10 +2587,11 @@
     }
     function applyModelRefresh({syncSql=true, status='Modelo actualizado.'}={}) {
       recalculateModelFromCurrent();
+      currentReview = reviewSqlModel(currentModel, currentRelations, sqlInput.value);
       updateSummaryText();
+      renderReviewPanel();
       updateEntitySelector();
       updateSchemaEditor();
-      updateViewsTriggersPanels();
       updateViewsTriggersPanels();
       redrawFromState();
       if (syncSql && syncModeEl.value === 'auto') syncSqlFromModel(status);
@@ -2531,6 +2880,603 @@
         }
       });
     }
+
+
+    // ── SQL Visual Reviewer: análisis local de calidad ──────────────────────
+    function escapeHtml(str) {
+      return String(str || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    }
+    function downloadTextFile(filename, content, type='text/plain;charset=utf-8') {
+      const a = Object.assign(document.createElement('a'), {
+        href: URL.createObjectURL(new Blob([content], {type})),
+        download: filename
+      });
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+    function simpleHash(str) {
+      let h = 0; const src = String(str || '');
+      for (let i=0;i<src.length;i++) h = ((h << 5) - h + src.charCodeAt(i)) | 0;
+      return Math.abs(h).toString(36);
+    }
+    function classifyIdentifier(name) {
+      const s = String(name || '');
+      if (/^[a-z][a-z0-9]*(_[a-z0-9]+)+$/.test(s)) return 'snake_case';
+      if (/^[a-z][a-z0-9]*([A-Z][a-z0-9]*)+$/.test(s)) return 'camelCase';
+      if (/^[A-Z][A-Za-z0-9]*$/.test(s)) return 'PascalCase';
+      if (/^[a-z0-9]+$/.test(s)) return 'simple';
+      return 'mixta';
+    }
+    function normalizeDataType(type) {
+      const base = String(type || '').toLowerCase().replace(/\(.+?\)/g, '').trim();
+      if (/^(int|integer|bigint|smallint|tinyint|mediumint|serial|bigserial|number|numeric|decimal|float|double|real)$/.test(base)) return 'number';
+      if (/^(varchar|char|text|tinytext|mediumtext|longtext|nvarchar|nchar|clob)$/.test(base)) return 'text';
+      if (/^(date|datetime|timestamp|time|year)$/.test(base)) return 'datetime';
+      if (/^(bool|boolean)$/.test(base)) return 'boolean';
+      if (/^(json|jsonb)$/.test(base)) return 'json';
+      return base || 'unknown';
+    }
+    function extractIndexMap(sql, model) {
+      const indexMap = new Map();
+      const addIndex = (tableName, cols, unique=false) => {
+        const key = normalizeNameKey(tableName);
+        if (!key || !cols?.length) return;
+        if (!indexMap.has(key)) indexMap.set(key, []);
+        indexMap.get(key).push({ cols: cols.map(cleanIdentifier), unique });
+      };
+      (model?.tables || []).forEach(t => {
+        if (t.primaryKey?.length) addIndex(t.name, t.primaryKey, true);
+        (t.uniqueConstraints || []).forEach(cols => addIndex(t.name, cols, true));
+        (t.columns || []).filter(c => c.isPk || c.isUnique).forEach(c => addIndex(t.name, [c.name], true));
+      });
+      const cleaned = stripComments(sql || '');
+      let m;
+      const reCreate = /CREATE\s+(?:UNIQUE\s+)?INDEX\s+[`"\[]?[\w$#]+[`"\]]?\s+ON\s+((?:[`"\[]?[\w$#]+[`"\]]?\.)?[`"\[]?[\w$#]+[`"\]]?)\s*\(([^)]+)\)/gi;
+      while ((m = reCreate.exec(cleaned))) {
+        addIndex(cleanIdentifier(m[1]).split('.').pop(), m[2].split(',').map(c => cleanIdentifier(c.replace(/\bASC\b|\bDESC\b/ig,''))), /CREATE\s+UNIQUE/i.test(m[0]));
+      }
+      extractCreateTableBlocks(cleaned).forEach(block => splitDefinitions(block.body).forEach(def => {
+        const im = def.match(/^(?:UNIQUE\s+)?(?:KEY|INDEX)\s+(?:[`"\[]?[\w$#]+[`"\]]?\s*)?\(([^)]+)\)/i);
+        if (im) addIndex(block.name, im[1].split(',').map(c => cleanIdentifier(c.replace(/\bASC\b|\bDESC\b/ig,''))), /^UNIQUE/i.test(def));
+      }));
+      return indexMap;
+    }
+    function hasLeadingIndex(indexMap, tableName, cols) {
+      const wanted = (cols || []).map(normalizeNameKey).filter(Boolean);
+      if (!wanted.length) return false;
+      return (indexMap.get(normalizeNameKey(tableName)) || []).some(idx => {
+        const got = (idx.cols || []).map(normalizeNameKey);
+        return wanted.every((c, i) => got[i] === c);
+      });
+    }
+
+    function hasAnyIndexCovering(indexMap, tableName, cols) {
+      const wanted = (cols || []).map(normalizeNameKey).filter(Boolean);
+      if (!wanted.length) return false;
+      return (indexMap.get(normalizeNameKey(tableName)) || []).some(idx => {
+        const got = (idx.cols || []).map(normalizeNameKey);
+        return wanted.every(c => got.includes(c));
+      });
+    }
+    function getIndexAdvisorSettings() {
+      const size = document.getElementById('indexDbSize')?.value || 'medium';
+      const sensitivity = document.getElementById('indexSensitivity')?.value || 'balanced';
+      const onlyEvidence = document.getElementById('indexOnlyEvidence')?.checked !== false;
+      return { size, sensitivity, onlyEvidence };
+    }
+    function refreshIndexTuningBadge() {
+      const settings = getIndexAdvisorSettings();
+      const s = {conservative:'Conservador', balanced:'Equilibrado', aggressive:'Agresivo'}[settings.sensitivity] || 'Equilibrado';
+      const z = {small:'pequeña', medium:'media', large:'grande', huge:'muy grande'}[settings.size] || 'media';
+      const badge = document.getElementById('indexTuningBadge');
+      if (badge) badge.textContent = `${s} · BD ${z}`;
+    }
+    function columnEvidenceInSql(sql, tableName, colName) {
+      const t = normalizeNameKey(tableName), c = normalizeNameKey(colName);
+      if (!t || !c) return false;
+      return splitSqlStatementsWithTerminators(sql || '').map(st => st.toLowerCase()).some(st => {
+        if (!/\b(select|update|delete)\b/.test(st)) return false;
+        if (!new RegExp('\\b(from|join|update)\\s+[`"\\[]?' + t + '[`"\\]]?\\b', 'i').test(st)) return false;
+        const relevant = (st.match(/\bwhere\b[\s\S]*|\bon\b[\s\S]*|\border\s+by\b[\s\S]*|\bgroup\s+by\b[\s\S]*/i) || [''])[0];
+        return !!relevant && new RegExp('\\b' + c + '\\b', 'i').test(relevant);
+      });
+    }
+    function compositeEvidenceInSql(sql, tableName, cols) {
+      const filtered = (cols || []).map(normalizeNameKey).filter(Boolean);
+      return filtered.length >= 2 && new Set(filtered).size === filtered.length && filtered.every(c => columnEvidenceInSql(sql, tableName, c));
+    }
+    function isTemporalOrOperationalTable(table) {
+      return /(historial|history|log|movimiento|movement|evento|event|cita|appointment|intervencion|ticket|incidencia|factura|pedido|order)/i.test(normalizeNameKey(table?.name || ''));
+    }
+    function shouldSuggestCompositeIndex(table, cols, sql, indexMap, settings=getIndexAdvisorSettings()) {
+      const normalized = (cols || []).map(normalizeNameKey).filter(Boolean);
+      if (normalized.length < 2 || new Set(normalized).size !== normalized.length) return false;
+      if (hasLeadingIndex(indexMap, table.name, cols) || hasAnyIndexCovering(indexMap, table.name, cols)) return false;
+      const evidence = compositeEvidenceInSql(sql, table.name, cols);
+      if (evidence) return settings.sensitivity !== 'conservative' || settings.size !== 'small';
+      if (settings.onlyEvidence || settings.sensitivity !== 'aggressive') return false;
+      return settings.size === 'large' || settings.size === 'huge' || isTemporalOrOperationalTable(table);
+    }
+    function shouldSuggestOptionalIndex(settings=getIndexAdvisorSettings()) {
+      return settings.sensitivity === 'aggressive' && (settings.size === 'large' || settings.size === 'huge') && !settings.onlyEvidence;
+    }
+    function shouldSuggestNaturalKeyIndex(table, col, sql, indexMap, settings=getIndexAdvisorSettings()) {
+      if (!col || col.isUnique || hasLeadingIndex(indexMap, table.name, [col.name])) return false;
+      const name = normalizeNameKey(col.name);
+      if (/^(email|correo|username|login|slug|referencia|codigo|code)$/.test(name) && columnEvidenceInSql(sql, table.name, col.name)) return true;
+      return settings.sensitivity === 'aggressive' && settings.size !== 'small' && /^(email|correo|username|login|slug|referencia|codigo|code)$/.test(name);
+    }
+    function compactIndexIssues(issues, settings=getIndexAdvisorSettings()) {
+      const seen = new Set();
+      const maxInfo = settings.sensitivity === 'aggressive' ? (settings.size === 'huge' ? 12 : 8) : settings.sensitivity === 'balanced' ? 5 : 2;
+      let infoCount = 0;
+      for (let i = issues.length - 1; i >= 0; i--) {
+        const issue = issues[i];
+        if (issue.category !== 'indices') continue;
+        const key = `${normalizeNameKey(issue.table)}::${String(issue.column || issue.fix || '').toLowerCase().replace(/\s+/g,'')}`;
+        const hasCreateIndex = /create\s+index/i.test(issue.fix || '');
+        if (seen.has(key)) { issues.splice(i, 1); continue; }
+        seen.add(key);
+        if (settings.size === 'small' && issue.severity === 'info') { issues.splice(i, 1); continue; }
+        if (issue.severity === 'info' && hasCreateIndex) {
+          infoCount++;
+          if (infoCount > maxInfo) issues.splice(i, 1);
+        }
+      }
+    }
+    function isLookupTable(table) {
+      if (!table) return false;
+      const name = normalizeNameKey(table.name);
+      const cols = table.columns || [];
+      const hasNameColumn = cols.some(c => /(nombre|name|codigo|code|descripcion|description|valor|value|estado|status|tipo|type)/i.test(c.name));
+      const smallShape = cols.length <= 5;
+      return smallShape && hasNameColumn && /(tipo|estado|status|categoria|category|maestro|lookup|catalogo|catalog)/i.test(name);
+    }
+    function fkColsAreNullable(table, cols=[]) {
+      return (cols || []).some(col => {
+        const found = (table?.columns || []).find(c => normalizeNameKey(c.name) === normalizeNameKey(col));
+        return found && found.isNullable !== false;
+      });
+    }
+    function makeIssue({severity='info', category='general', table='', column='', title, detail, fix, weight=2}) {
+      const id = `issue:${severity}:${category}:${table}:${column}:${simpleHash(title + detail + fix)}`;
+      return { id, severity, category, table, column, title, detail, fix, weight };
+    }
+    function fkRelationKey(from, to, cols, refCols) {
+      return [normalizeNameKey(from), normalizeNameKey(to), (cols || []).map(normalizeNameKey).join('|'), (refCols || []).map(normalizeNameKey).join('|')].join('::');
+    }
+    function relationKeySet(relations) {
+      return new Set((relations || []).map(r => fkRelationKey(r.from, r.to, r.fk?.columns || [], r.fk?.refColumns || [])));
+    }
+    function singularizeNameKey(name) {
+      let s = normalizeNameKey(name);
+      if (s.endsWith('ies')) return s.slice(0, -3) + 'y';
+      if (s.endsWith('es')) return s.slice(0, -2);
+      if (s.endsWith('s')) return s.slice(0, -1);
+      return s;
+    }
+    function guessReferencedTableFromColumn(colName, tables) {
+      const n = normalizeNameKey(colName);
+      const candidates = [];
+      if (n.endsWith('_id')) candidates.push(n.slice(0, -3));
+      if (n.startsWith('id_')) candidates.push(n.slice(3));
+      const camel = String(colName || '').match(/^id([A-Z][A-Za-z0-9]*)$/);
+      if (camel) candidates.push(normalizeNameKey(camel[1]));
+      const lower = String(colName || '').match(/^([A-Za-z0-9]+)ID$/);
+      if (lower) candidates.push(normalizeNameKey(lower[1]));
+      const tableKeys = (tables || []).map(t => ({ table:t, key:normalizeNameKey(t.name), singular:singularizeNameKey(t.name) }));
+      for (const c of candidates.filter(Boolean)) {
+        const cs = singularizeNameKey(c);
+        const match = tableKeys.find(t => t.key === c || t.singular === c || t.key === cs || t.singular === cs);
+        if (match) return match.table;
+      }
+      return null;
+    }
+
+
+    // ── v34: Advanced advisor heuristics ─────────────────────────────────────
+    function likelyCardinalityForMissingFk(table, col, parent) {
+      const localUnique = !!col?.isUnique || !!col?.isPk || (table.uniqueConstraints || []).some(cols => cols.length === 1 && normalizeNameKey(cols[0]) === normalizeNameKey(col.name));
+      const min = col?.isNullable === false ? '1' : '0';
+      const child = localUnique ? `${min}..1` : `${min}..N`;
+      return `${table.name}.${col.name} → ${parent?.name || 'tabla_destino'}: hijo ${child}, padre 1..1`;
+    }
+    function addAdvancedAdvisorIssues(issues, model, relations, sql, indexMap) {
+      const tables = model?.tables || [];
+      const tableMap = new Map(tables.map(t => [normalizeNameKey(t.name), t]));
+      const relationPairs = new Set((relations || []).map(r => `${normalizeNameKey(r.from)}->${normalizeNameKey(r.to)}`));
+      tables.forEach(table => {
+        const cols = table.columns || [];
+        const pkSet = new Set((table.primaryKey || []).map(normalizeNameKey));
+        const declaredFkCols = new Set((table.foreignKeys || []).flatMap(fk => fk.columns || []).map(normalizeNameKey));
+        cols.forEach(col => {
+          const n = normalizeNameKey(col.name);
+          const looksFk = n.endsWith('_id') || n.startsWith('id_') || /^id[A-Z]/.test(col.name) || /Id$|ID$/.test(col.name);
+          if (looksFk && !declaredFkCols.has(n) && !pkSet.has(n) && n !== 'id') {
+            const guessed = guessReferencedTableFromColumn(col.name, tables.filter(t => normalizeNameKey(t.name) !== normalizeNameKey(table.name)));
+            if (guessed) issues.push(makeIssue({severity:'warning', category:'cardinalidad', table:table.name, column:col.name, title:`Cardinalidad probable para FK faltante: ${table.name}.${col.name}`, detail:`El campo parece apuntar a ${guessed.name}. Cardinalidad sugerida: ${likelyCardinalityForMissingFk(table, col, guessed)}.`, fix:`Añade ALTER TABLE ${table.name} ADD CONSTRAINT fk_${table.name}_${guessed.name} FOREIGN KEY (${col.name}) REFERENCES ${guessed.name}(${guessed.primaryKey?.[0] || 'id'});`, weight:5}));
+          }
+          const t = String(col.type || '').toLowerCase();
+          if (/(^|_)(activo|active|enabled|deleted|borrado|publicado|published)(_|$)/i.test(col.name) && normalizeDataType(col.type) === 'text') issues.push(makeIssue({severity:'warning', category:'tipos', table:table.name, column:col.name, title:`${table.name}.${col.name} parece booleano guardado como texto`, detail:`El campo parece representar un sí/no, pero usa ${col.type}.`, fix:'Usa BOOLEAN, BIT o NUMBER(1) según el motor destino.', weight:4}));
+          if (/(precio|price|importe|amount|total|saldo|balance|coste|cost)/i.test(col.name) && /float|double|real/i.test(t)) issues.push(makeIssue({severity:'warning', category:'tipos', table:table.name, column:col.name, title:`${table.name}.${col.name} usa tipo aproximado para dinero`, detail:`El tipo ${col.type} puede introducir errores de redondeo en importes.`, fix:'Usa DECIMAL(p,s) / NUMERIC(p,s), por ejemplo DECIMAL(12,2), y define moneda si aplica.', weight:6}));
+          if (/(email|correo)/i.test(col.name) && normalizeDataType(col.type) !== 'text') issues.push(makeIssue({severity:'warning', category:'tipos', table:table.name, column:col.name, title:`${table.name}.${col.name} debería ser texto validable`, detail:'Un email/correo normalmente debe almacenarse como VARCHAR con longitud controlada y UNIQUE si identifica al usuario.', fix:'Usa VARCHAR(254), normaliza mayúsculas/minúsculas y considera UNIQUE si debe ser identificador.', weight:3}));
+        });
+        const indexSettings = getIndexAdvisorSettings();
+        (table.foreignKeys || []).forEach(fk => {
+          const fkCols = fk.columns || [];
+          const fkNorm = new Set(fkCols.map(normalizeNameKey));
+          const dateCol = cols.find(c => /(fecha|date|created_at|created|timestamp|updated_at|fecha_apertura|fecha_inicio|fecha_cambio|fecha_emision|fecha_programada)/i.test(c.name) && !fkNorm.has(normalizeNameKey(c.name)));
+          const statusCol = cols.find(c => /(estado|status|prioridad|priority|tipo_linea|fase|situacion)/i.test(c.name) && !/^id[_A-Z]|_id$/i.test(c.name) && !fkNorm.has(normalizeNameKey(c.name)));
+          if (fkCols.length && dateCol && shouldSuggestCompositeIndex(table, [...fkCols, dateCol.name], sql, indexMap, indexSettings)) issues.push(makeIssue({severity:'info', category:'indices', table:table.name, column:[...fkCols, dateCol.name].join(','), title:'Índice compuesto candidato con evidencia', detail:`Se ha visto o se ha configurado como probable el uso conjunto de ${fkCols.join(', ')} y ${dateCol.name}.`, fix:`Valida con EXPLAIN antes de crear: CREATE INDEX idx_${table.name}_${fkCols[0]}_${dateCol.name} ON ${table.name}(${[...fkCols, dateCol.name].join(', ')});`, weight:1}));
+          if (fkCols.length && statusCol && shouldSuggestCompositeIndex(table, [...fkCols, statusCol.name], sql, indexMap, indexSettings)) issues.push(makeIssue({severity:'info', category:'indices', table:table.name, column:[...fkCols, statusCol.name].join(','), title:'Índice compuesto candidato con evidencia', detail:`Se ha visto o se ha configurado como probable el uso conjunto de ${fkCols.join(', ')} y ${statusCol.name}.`, fix:`Valida con EXPLAIN antes de crear: CREATE INDEX idx_${table.name}_${fkCols[0]}_${statusCol.name} ON ${table.name}(${[...fkCols, statusCol.name].join(', ')});`, weight:1}));
+        });
+        const naturalKey = cols.find(c => /(codigo|code|slug|email|correo|username|login|referencia)/i.test(c.name) && !c.isUnique);
+        if (naturalKey && shouldSuggestNaturalKeyIndex(table, naturalKey, sql, indexMap, indexSettings)) issues.push(makeIssue({severity:'info', category:'indices', table:table.name, column:naturalKey.name, title:`Índice/UNIQUE candidato para ${table.name}.${naturalKey.name}`, detail:'El nombre sugiere búsquedas frecuentes o clave de negocio, pero solo se recomienda si aparece en filtros o si debe ser único.', fix:`Si debe ser único, añade UNIQUE (${naturalKey.name}); si solo se busca con frecuencia, valida primero con EXPLAIN.`, weight:1}));
+        const groups = [];
+        if (cols.filter(c => /(email|correo|telefono|phone|direccion|address|ciudad|postal|dni|nif)/i.test(c.name)).length >= 3) groups.push('contacto/datos personales');
+        if (cols.some(c => /(password|hash|token|secret|ultimo_login|last_login|mfa|2fa)/i.test(c.name))) groups.push('autenticación/seguridad');
+        if (cols.filter(c => /(created|updated|deleted|fecha_alta|fecha_baja|created_at|updated_at|deleted_at)/i.test(c.name)).length >= 3) groups.push('auditoría/ciclo de vida');
+        if (cols.filter(c => /(precio|importe|total|saldo|iva|tax|descuento|moneda|currency)/i.test(c.name)).length >= 3) groups.push('finanzas/importes');
+        if (cols.filter(c => /(estado|status|tipo|categoria|category|prioridad|priority)/i.test(c.name)).length >= 3) groups.push('clasificación/estado');
+        if (groups.length >= 2 && cols.length >= 8) issues.push(makeIssue({severity:'warning', category:'normalizacion', table:table.name, title:`${table.name} mezcla responsabilidades`, detail:`Se detectan grupos de columnas de ${groups.join(' y ')} en la misma tabla.`, fix:'Valora separar subtablas 1:1 o 1:N para contacto, autenticación, auditoría, importes o estados según su ciclo de vida y permisos.', weight:6}));
+        (table.foreignKeys || []).forEach(fk => {
+          const parent = tableMap.get(normalizeNameKey(fk.refTable));
+          if (parent && relationPairs.has(`${normalizeNameKey(parent.name)}->${normalizeNameKey(table.name)}`)) issues.push(makeIssue({severity:'info', category:'cardinalidad', table:table.name, column:(fk.columns||[]).join(','), title:`Relación circular entre ${table.name} y ${parent.name}`, detail:'Hay FKs en ambos sentidos. Puede ser correcto, pero conviene documentar cuál es obligatoria y cuál es opcional.', fix:'Revisa nulabilidad, UNIQUE y reglas ON DELETE/ON UPDATE para evitar inserciones imposibles o ciclos de dependencia.', weight:2}));
+        });
+      });
+    }
+
+    // ── v34: SQL dialect converter ───────────────────────────────────────────
+    function convertSqlDialect(sql, source, target) {
+      let out = String(sql || '');
+      const warnings = [];
+      if (!out.trim()) return { sql:'', warnings:['No hay SQL que convertir.'] };
+      out = out.replace(/\r\n/g, '\n').replace(/ENGINE\s*=\s*\w+\s*/gi, '').replace(/DEFAULT\s+CHARSET\s*=\s*\w+\s*/gi, '').replace(/CHARACTER\s+SET\s+\w+/gi, '').replace(/COLLATE\s+\w+/gi, '').replace(/\bUNSIGNED\b/gi, '');
+      if (target === 'postgresql') {
+        out = out.replace(/`([^`]+)`/g, '"$1"').replace(/\[([^\]]+)\]/g, '"$1"').replace(/\bTINYINT\s*\(\s*1\s*\)/gi, 'BOOLEAN').replace(/\bDATETIME\b/gi, 'TIMESTAMP').replace(/\bDOUBLE\b/gi, 'DOUBLE PRECISION').replace(/\bAUTO_INCREMENT\b/gi, 'GENERATED BY DEFAULT AS IDENTITY').replace(/\bINT\s+GENERATED\s+BY\s+DEFAULT\s+AS\s+IDENTITY/gi, 'INTEGER GENERATED BY DEFAULT AS IDENTITY').replace(/\bSERIAL\b/gi, 'INTEGER GENERATED BY DEFAULT AS IDENTITY');
+      } else if (target === 'mysql') {
+        out = out.replace(/"([^"\n]+)"/g, '`$1`').replace(/\[([^\]]+)\]/g, '`$1`').replace(/\bTIMESTAMP\s+WITH\s+TIME\s+ZONE\b/gi, 'TIMESTAMP').replace(/\bVARCHAR2\b/gi, 'VARCHAR').replace(/\bNUMBER\s*\(\s*1\s*\)/gi, 'BOOLEAN').replace(/\bGENERATED\s+BY\s+DEFAULT\s+AS\s+IDENTITY\b/gi, 'AUTO_INCREMENT').replace(/\bSERIAL\b/gi, 'INT AUTO_INCREMENT');
+      } else if (target === 'sqlserver') {
+        out = out.replace(/`([^`]+)`/g, '[$1]').replace(/"([^"\n]+)"/g, '[$1]').replace(/\bBOOLEAN\b/gi, 'BIT').replace(/\bTEXT\b/gi, 'NVARCHAR(MAX)').replace(/\bDATETIME\b|\bTIMESTAMP\b/gi, 'DATETIME2').replace(/\bAUTO_INCREMENT\b/gi, 'IDENTITY(1,1)').replace(/\bGENERATED\s+BY\s+DEFAULT\s+AS\s+IDENTITY\b/gi, 'IDENTITY(1,1)').replace(/\bSERIAL\b/gi, 'INT IDENTITY(1,1)');
+        if (/\bLIMIT\s+\d+/i.test(out)) warnings.push('LIMIT requiere revisión manual en SQL Server; normalmente se usa TOP u OFFSET/FETCH.');
+      } else if (target === 'oracle') {
+        out = out.replace(/`([^`]+)`/g, '"$1"').replace(/\[([^\]]+)\]/g, '"$1"').replace(/\bVARCHAR\b/gi, 'VARCHAR2').replace(/\bBOOLEAN\b/gi, 'NUMBER(1)').replace(/\bDATETIME\b/gi, 'TIMESTAMP').replace(/\bTEXT\b/gi, 'CLOB').replace(/\bAUTO_INCREMENT\b/gi, 'GENERATED BY DEFAULT AS IDENTITY').replace(/\bSERIAL\b/gi, 'NUMBER GENERATED BY DEFAULT AS IDENTITY');
+        if (/\bLIMIT\s+\d+/i.test(out)) warnings.push('LIMIT requiere revisión manual en Oracle; usa FETCH FIRST n ROWS ONLY.');
+      } else if (target === 'sqlite') {
+        out = out.replace(/`([^`]+)`/g, '"$1"').replace(/\[([^\]]+)\]/g, '"$1"').replace(/\bVARCHAR\s*\([^)]*\)|\bVARCHAR2\s*\([^)]*\)|\bCHAR\s*\([^)]*\)|\bNVARCHAR\s*\([^)]*\)/gi, 'TEXT').replace(/\bBOOLEAN\b|\bBIT\b/gi, 'INTEGER').replace(/\bDATETIME\b|\bTIMESTAMP\b|\bDATE\b/gi, 'TEXT').replace(/\bDECIMAL\s*\([^)]*\)|\bNUMERIC\s*\([^)]*\)|\bNUMBER\s*\([^)]*\)/gi, 'NUMERIC').replace(/\bAUTO_INCREMENT\b/gi, 'AUTOINCREMENT').replace(/\bGENERATED\s+BY\s+DEFAULT\s+AS\s+IDENTITY\b/gi, 'AUTOINCREMENT');
+        warnings.push('SQLite tiene tipado dinámico: revisa PK autoincrementales; suele requerir INTEGER PRIMARY KEY AUTOINCREMENT.');
+      }
+      if (source !== target) warnings.push('Conversión heurística: revisa constraints, funciones, triggers/procedures, secuencias y sintaxis específica del motor.');
+      out = out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+      return { sql: `-- Convertido de ${source} a ${target} por SQL Visual Reviewer v35\n-- Revisión manual recomendada antes de ejecutar.\n\n${out}\n`, warnings };
+    }
+    function runSqlConverter() {
+      const src = document.getElementById('converterSource')?.value || 'mysql';
+      const tgt = document.getElementById('converterTarget')?.value || 'postgresql';
+      const output = document.getElementById('convertedSqlOutput');
+      const warningEl = document.getElementById('converterWarnings');
+      const result = convertSqlDialect(sqlInput.value, src, tgt);
+      if (output) output.value = result.sql;
+      if (warningEl) warningEl.textContent = result.warnings.length ? result.warnings.join(' ') : 'Conversión realizada sin avisos adicionales.';
+      setStatus(result.sql ? `SQL convertido de ${src} a ${tgt}.` : 'No hay SQL para convertir.', result.sql ? 'ok' : 'warn');
+    }
+
+    function reviewSqlModel(model, relations, sql='') {
+      const issues = [];
+      const tables = model?.tables || [];
+      const tableMap = new Map(tables.map(t => [normalizeNameKey(t.name), t]));
+      const indexMap = extractIndexMap(sql, model);
+      const incoming = new Map(tables.map(t => [t.name, 0]));
+      const outgoing = new Map(tables.map(t => [t.name, 0]));
+      (relations || []).forEach(r => { incoming.set(r.to, (incoming.get(r.to)||0)+1); outgoing.set(r.from, (outgoing.get(r.from)||0)+1); });
+      const renderedRelationKeys = relationKeySet(relations);
+      const declaredAlterFks = extractAlterTableForeignKeys(sql);
+
+      declaredAlterFks.forEach(fk => {
+        const table = tableMap.get(normalizeNameKey(fk.table));
+        if (!table) issues.push(makeIssue({severity:'critical', category:'relaciones', table:fk.table, column:(fk.columns||[]).join(','), title:`ALTER TABLE referencia tabla local inexistente: ${fk.table}`, detail:'Hay una FOREIGN KEY declarada con ALTER TABLE, pero la tabla local no existe o no fue parseada.', fix:'Corrige el nombre de la tabla del ALTER TABLE o añade su CREATE TABLE antes de declarar la FK.', weight:14}));
+      });
+
+      tables.forEach(table => {
+        if (!table.primaryKey?.length) issues.push(makeIssue({severity:'critical', category:'integridad', table:table.name, title:`${table.name} no tiene primary key`, detail:'Una tabla sin clave primaria complica relaciones, actualizaciones, eliminación segura y trazabilidad.', fix:`Añade una PRIMARY KEY a ${table.name}, normalmente un id estable o una clave compuesta si es una tabla puente.`, weight:14}));
+        if ((incoming.get(table.name)||0) === 0 && (outgoing.get(table.name)||0) === 0 && tables.length > 1) issues.push(makeIssue({severity:'warning', category:'relaciones', table:table.name, title:`${table.name} está aislada`, detail:'La tabla no participa en ninguna relación detectada. Puede ser correcto para catálogos, logs o auditoría, pero conviene revisarlo.', fix:'Añade las claves foráneas que falten o documenta por qué la tabla debe quedar independiente.', weight:5}));
+        if ((table.columns || []).length > 18) issues.push(makeIssue({severity:'warning', category:'normalizacion', table:table.name, title:`${table.name} tiene muchas columnas`, detail:`Se han detectado ${table.columns.length} columnas. Las tablas muy anchas suelen mezclar responsabilidades.`, fix:'Revisa si conviene separar datos de perfil, configuración, estado, auditoría o credenciales en tablas auxiliares.', weight:5}));
+        const colNames = new Map();
+        (table.columns || []).forEach(col => {
+          const nk = normalizeNameKey(col.name);
+          if (colNames.has(nk)) issues.push(makeIssue({severity:'critical', category:'integridad', table:table.name, column:col.name, title:`Campo duplicado en ${table.name}: ${col.name}`, detail:'Hay dos columnas con el mismo nombre normalizado.', fix:'Renombra o elimina el campo duplicado para evitar ambigüedad en consultas y migraciones.', weight:10}));
+          colNames.set(nk, col);
+          if (/varchar\s*\(\s*255\s*\)/i.test(col.type || '')) issues.push(makeIssue({severity:'info', category:'tipos', table:table.name, column:col.name, title:`${table.name}.${col.name} usa VARCHAR(255)`, detail:'VARCHAR(255) puede ser válido, pero cuando aparece por defecto en muchos campos suele indicar diseño generado sin criterio de dominio.', fix:'Ajusta longitudes según el dato real: email, slug, teléfono, nombre, descripción, etc.', weight:1}));
+          if (/(fecha|date|created|updated|time|hora)/i.test(col.name) && normalizeDataType(col.type) === 'text') issues.push(makeIssue({severity:'warning', category:'tipos', table:table.name, column:col.name, title:`${table.name}.${col.name} parece fecha guardada como texto`, detail:`El tipo detectado es ${col.type}. Guardar fechas como texto dificulta ordenar, filtrar y validar.`, fix:'Usa DATE, DATETIME o TIMESTAMP según el caso.', weight:6}));
+          if (/(password|passwd|pass|hash|token|secret)/i.test(col.name) && !/(hash|token)/i.test(col.name)) issues.push(makeIssue({severity:'warning', category:'seguridad', table:table.name, column:col.name, title:`${table.name}.${col.name} contiene credenciales`, detail:'El nombre sugiere almacenamiento de contraseña o secreto. Debe evitarse guardar contraseñas en claro.', fix:'Guarda solo hashes robustos y considera separar autenticación en una tabla usuario_auth.', weight:8}));
+        });
+        const varchar255Count = (table.columns || []).filter(c => /varchar\s*\(\s*255\s*\)/i.test(c.type || '')).length;
+        if (varchar255Count >= 4 || (table.columns?.length >= 5 && varchar255Count / table.columns.length > .55)) issues.push(makeIssue({severity:'warning', category:'tipos', table:table.name, title:`${table.name} abusa de VARCHAR(255)`, detail:`${varchar255Count} columnas usan VARCHAR(255).`, fix:'Define tipos y longitudes según reglas de negocio; usa TEXT solo para contenido largo y tipos numéricos/fecha cuando corresponda.', weight:5}));
+        const lowName = normalizeNameKey(table.name);
+        const hasAuth = (table.columns || []).some(c => /(password|passwd|hash|token|secret)/i.test(c.name));
+        const hasPersonal = (table.columns || []).some(c => /(email|correo|nombre|name|telefono|phone|direccion|address|dni|nif)/i.test(c.name));
+        if (/(usuario|user|cliente|customer)/i.test(lowName) && hasAuth && hasPersonal) issues.push(makeIssue({severity:'warning', category:'seguridad', table:table.name, title:`${table.name} mezcla perfil y credenciales`, detail:'La misma tabla parece contener datos personales y autenticación.', fix:`Separa credenciales en una tabla como ${table.name}_auth con hash, proveedor, último login y datos de seguridad.`, weight:7}));
+        if (/(producto|product)/i.test(lowName) && !(table.columns || []).some(c => /(estado|status|activo|active|disponible|available|stock)/i.test(c.name))) issues.push(makeIssue({severity:'info', category:'dominio', table:table.name, title:`${table.name} no tiene estado/disponibilidad`, detail:'En catálogos de productos suele ser útil distinguir activo, descatalogado, borrador, sin stock o disponible.', fix:'Considera añadir estado, activo/disponible o una política explícita de stock.', weight:2}));
+        if (/(pedido|order)/i.test(lowName) && !(table.columns || []).some(c => /(estado|status|total|importe|amount|fecha|date)/i.test(c.name))) issues.push(makeIssue({severity:'info', category:'dominio', table:table.name, title:`${table.name} parece incompleta para pedidos`, detail:'Una tabla de pedidos normalmente necesita fecha, estado y total/importe o una estrategia clara para calcularlo.', fix:'Añade campos de estado/fecha o documenta que el total se calcula desde líneas de pedido.', weight:2}));
+        (table.columns || []).forEach(col => {
+          const looksLikeFk = /^id[_A-Z]/.test(col.name) || /_id$/i.test(col.name) || /Id$/.test(col.name) || /ID$/.test(col.name);
+          const isDeclaredFk = (table.foreignKeys || []).some(fk => (fk.columns || []).some(c => normalizeNameKey(c) === normalizeNameKey(col.name)));
+          if (!looksLikeFk || isDeclaredFk || col.isPk || normalizeNameKey(col.name) === 'id') return;
+          const guessed = guessReferencedTableFromColumn(col.name, tables.filter(t => normalizeNameKey(t.name) !== normalizeNameKey(table.name)));
+          if (guessed) {
+            issues.push(makeIssue({severity:'warning', category:'relaciones', table:table.name, column:col.name, title:`${table.name}.${col.name} parece FK pero no está enlazada`, detail:`El nombre del campo sugiere una relación con ${guessed.name}, pero no hay FOREIGN KEY declarada ni línea visible en el diagrama.`, fix:`Declara FOREIGN KEY (${col.name}) REFERENCES ${guessed.name}(${guessed.primaryKey?.[0] || 'id'}) o renombra el campo si no representa una relación.`, weight:9}));
+          } else {
+            issues.push(makeIssue({severity:'info', category:'relaciones', table:table.name, column:col.name, title:`${table.name}.${col.name} parece identificador sin FK`, detail:'El campo tiene formato típico de clave foránea, pero no se ha encontrado constraint ni tabla destino evidente.', fix:'Añade una FOREIGN KEY explícita o renombra/documenta el campo para evitar confusión en el modelo visual.', weight:3}));
+          }
+        });
+      });
+
+      tables.forEach(table => (table.foreignKeys || []).forEach(fk => {
+        const parent = tableMap.get(normalizeNameKey(fk.refTable));
+        const localCols = fk.columns || [];
+        if (!parent) {
+          issues.push(makeIssue({severity:'critical', category:'relaciones', table:table.name, column:localCols.join(','), title:`${table.name} referencia una tabla inexistente: ${fk.refTable}`, detail:'La clave foránea apunta a una tabla que no se ha detectado en el script.', fix:'Corrige el nombre de la tabla referenciada o añade su CREATE TABLE.', weight:14}));
+          return;
+        }
+        const parentCols = fk.refColumns || [];
+        const expectedRelKey = fkRelationKey(table.name, parent.name, localCols, parentCols);
+        if (!renderedRelationKeys.has(expectedRelKey)) {
+          issues.push(makeIssue({severity:'critical', category:'relaciones', table:table.name, column:localCols.join(','), title:`FK declarada pero no visible: ${table.name}.${localCols.join(', ')} → ${parent.name}.${parentCols.join(', ')}`, detail:'La clave foránea existe en el modelo parseado, pero no aparece como relación dibujada. Esto suele indicar desajuste de nombres, duplicado o fallo de sincronización visual.', fix:'Reanaliza el SQL tras corregir nombres/columnas. Si usas ALTER TABLE, esta versión ya intenta importarlo y debe dibujar la relación.', weight:12}));
+        }
+        localCols.forEach(localCol => {
+          const lc = table.columns.find(c => normalizeNameKey(c.name) === normalizeNameKey(localCol));
+          if (!lc) issues.push(makeIssue({severity:'critical', category:'relaciones', table:table.name, column:localCol, title:`FK usa columna local inexistente: ${table.name}.${localCol}`, detail:'La FOREIGN KEY declara una columna local que no existe en la tabla.', fix:`Corrige la FK o añade la columna ${localCol} en ${table.name}.`, weight:13}));
+        });
+        parentCols.forEach(refCol => {
+          const pc = parent.columns.find(c => normalizeNameKey(c.name) === normalizeNameKey(refCol));
+          if (!pc) issues.push(makeIssue({severity:'critical', category:'relaciones', table:table.name, column:localCols.join(','), title:`FK hacia columna inexistente: ${parent.name}.${refCol}`, detail:'La columna referenciada no existe en la tabla destino.', fix:'Corrige la columna referenciada o añade esa columna a la tabla destino.', weight:13}));
+          else if (!pc.isPk && !pc.isUnique && !(parent.uniqueConstraints || []).some(cols => cols.map(normalizeNameKey).includes(normalizeNameKey(refCol)))) issues.push(makeIssue({severity:'warning', category:'relaciones', table:table.name, column:localCols.join(','), title:`FK apunta a columna no única: ${parent.name}.${refCol}`, detail:'Una foreign key debería referenciar una PK o una clave única para evitar relaciones ambiguas.', fix:`Convierte ${parent.name}.${refCol} en PRIMARY KEY/UNIQUE o referencia la PK correcta.`, weight:7}));
+        });
+        localCols.forEach((localCol, i) => {
+          const lc = table.columns.find(c => normalizeNameKey(c.name) === normalizeNameKey(localCol));
+          const pc = parent.columns.find(c => normalizeNameKey(c.name) === normalizeNameKey(parentCols[i] || parentCols[0]));
+          if (lc && pc && normalizeDataType(lc.type) !== normalizeDataType(pc.type)) issues.push(makeIssue({severity:'warning', category:'tipos', table:table.name, column:lc.name, title:`Tipos distintos en FK ${table.name}.${lc.name} → ${parent.name}.${pc.name}`, detail:`Tipo local: ${lc.type}. Tipo referenciado: ${pc.type}.`, fix:'Usa tipos compatibles entre FK y PK para evitar conversiones implícitas y errores de integridad.', weight:6}));
+        });
+        if (!hasLeadingIndex(indexMap, table.name, localCols)) {
+          const settings = getIndexAdvisorSettings();
+          const optionalFkIndex = isAuditOrHistoryTable(table) || isLookupTable(parent) || fkColsAreNullable(table, localCols);
+          const hasEvidence = localCols.some(col => columnEvidenceInSql(sql, table.name, col));
+          const shouldReportFkIndex = !optionalFkIndex || hasEvidence || shouldSuggestOptionalIndex(settings);
+          if (shouldReportFkIndex && !(settings.size === 'small' && optionalFkIndex)) issues.push(makeIssue({
+            severity: optionalFkIndex ? 'info' : (settings.size === 'small' ? 'info' : 'warning'),
+            category:'indices',
+            table:table.name,
+            column:localCols.join(','),
+            title:`${optionalFkIndex ? 'Índice opcional' : 'FK sin índice explícito'} en ${table.name}.${localCols.join(', ')}`,
+            detail: optionalFkIndex
+              ? 'La FK parece nullable, de auditoría o apunta a una tabla maestra estable. No se recomienda crear índice automáticamente salvo consultas frecuentes o volumen alto.'
+              : 'Una FK sin índice puede afectar joins y acciones referenciales, pero la prioridad depende del tamaño de la tabla, consultas reales y motor SQL.',
+            fix: optionalFkIndex
+              ? `Valida con EXPLAIN. Crea índice sobre ${table.name}(${localCols.join(', ')}) solo si filtras/unes por esa columna con frecuencia.`
+              : `Si la tabla crece o hay joins frecuentes, crea un índice sobre ${table.name}(${localCols.join(', ')}).`,
+            weight: optionalFkIndex ? 1 : (settings.size === 'small' ? 2 : 6)
+          }));
+        }
+      }));
+
+      const allNames = [...tables.map(t => t.name), ...tables.flatMap(t => (t.columns || []).map(c => c.name))];
+      const styles = new Map();
+      allNames.forEach(n => styles.set(classifyIdentifier(n), (styles.get(classifyIdentifier(n)) || 0) + 1));
+      const meaningfulStyles = [...styles.entries()].filter(([k,v]) => k !== 'simple' && v >= 2);
+      if (meaningfulStyles.length > 1) issues.push(makeIssue({severity:'warning', category:'nombres', title:'Convenciones de nombres mezcladas', detail:`Se detectan varios estilos: ${meaningfulStyles.map(([k,v]) => `${k} (${v})`).join(', ')}.`, fix:'Unifica nombres, por ejemplo todo en snake_case: id_cliente, fecha_creacion, usuario_auth.', weight:5}));
+
+      const idLike = [];
+      tables.forEach(t => (t.columns || []).forEach(c => { if (/^id[A-Z_]|_id$|^id_|ID$|Id$|^id$/i.test(c.name)) idLike.push(c.name); }));
+      const idStyles = [...new Set(idLike.map(classifyIdentifier))].filter(st => st !== 'simple');
+      if (idStyles.length > 1) issues.push(makeIssue({severity:'info', category:'nombres', title:'IDs con formatos diferentes', detail:`Ejemplos detectados: ${[...new Set(idLike)].slice(0,8).join(', ')}.`, fix:'Usa una convención constante para IDs y FKs, por ejemplo id, cliente_id, producto_id.', weight:2}));
+
+      const bridgeTables = tables.filter(t => t.isBridge && !isAuditOrHistoryTable(t));
+      bridgeTables.forEach(t => {
+        const fkCols = [...new Set((t.foreignKeys || []).flatMap(fk => fk.columns || []))];
+        const normFkCols = fkCols.map(normalizeNameKey);
+        const hasUniqueBridge = ((t.primaryKey || []).length >= 2 && (t.primaryKey || []).map(normalizeNameKey).every(c => normFkCols.includes(c)))
+          || (t.uniqueConstraints || []).some(cols => normFkCols.every(c => cols.map(normalizeNameKey).includes(c)));
+        if (!hasUniqueBridge) issues.push(makeIssue({severity:'warning', category:'normalizacion', table:t.name, title:`${t.name} parece tabla puente sin unicidad compuesta`, detail:'Una tabla puente N:M puede permitir duplicados si no existe PK/UNIQUE sobre sus FKs.', fix:`Añade PRIMARY KEY o UNIQUE sobre (${fkCols.join(', ')}), salvo que sea una tabla de eventos/auditoría temporal.`, weight:7}));
+      });
+      tables.filter(t => isAuditOrHistoryTable(t)).forEach(t => {
+        const entityCol = (t.foreignKeys || [])[0]?.columns?.[0];
+        const dateCol = (t.columns || []).find(c => /(fecha|date|timestamp|cambio|created)/i.test(c.name))?.name;
+        const hasTemporalIndex = entityCol && dateCol && hasLeadingIndex(indexMap, t.name, [entityCol, dateCol]);
+        const settings = getIndexAdvisorSettings();
+        const temporalEvidence = entityCol && dateCol && compositeEvidenceInSql(sql, t.name, [entityCol, dateCol]);
+        if ((t.foreignKeys || []).length && !hasTemporalIndex && (temporalEvidence || settings.size === 'large' || settings.size === 'huge' || (settings.sensitivity === 'aggressive' && !settings.onlyEvidence))) issues.push(makeIssue({severity:'info', category:'indices', table:t.name, column:[entityCol, dateCol].filter(Boolean).join(','), title:`${t.name} parece tabla de auditoría`, detail:'En tablas de historial suele ser útil indexar por entidad y fecha cuando consultas la evolución temporal. No es obligatorio en bases pequeñas.', fix:`Valida con EXPLAIN. Si consultas historial por entidad y orden cronológico, considera (${entityCol || 'id_entidad'}, ${dateCol || 'fecha_cambio'}).`, weight:1}));
+      });
+      if (!relations?.length && tables.length > 1) issues.push(makeIssue({severity:'critical', category:'relaciones', title:'No se han detectado relaciones entre tablas', detail:'Un esquema con varias tablas pero sin FKs suele indicar que el modelo generado por IA está incompleto.', fix:'Añade FOREIGN KEY explícitas para que el modelo sea verificable y documentable.', weight:12}));
+      addAdvancedAdvisorIssues(issues, model, relations, sql, indexMap);
+      compactIndexIssues(issues, getIndexAdvisorSettings());
+
+      const critical = issues.filter(i => i.severity === 'critical').length;
+      const warning = issues.filter(i => i.severity === 'warning').length;
+      const info = issues.filter(i => i.severity === 'info').length;
+      const penalty = issues.reduce((acc, i) => acc + i.weight, 0);
+      const score = Math.max(0, Math.min(100, Math.round(100 - penalty)));
+      const grade = score >= 82 ? 'Bueno' : score >= 62 ? 'Revisable' : 'Riesgoso';
+      const stats = { tables: tables.length, relations: relations?.length || 0, bridgeTables: bridgeTables.length, views: currentViews.length, triggers: currentTriggers.length, procedures: currentProcedures.length, critical, warning, info };
+      return { score, grade, issues, stats, generatedAt: new Date().toISOString() };
+    }
+    // renderReviewPanel defined later (v31 override below)
+    function renderReviewPanel() { /* overridden by v31 version at bottom of file */ }
+    function focusReviewIssue(issueId) {
+      const issue = currentReview?.issues?.find(i => i.id === issueId);
+      if (!issue) return;
+      if (issue.table && getTableByName(issue.table)) { selectedTableName = issue.table; selectedOverlays.clear(); redrawFromState(); }
+      setStatus(`Revisión: ${issue.title}`, issue.severity === 'critical' ? 'danger' : issue.severity === 'warning' ? 'warn' : 'ok');
+    }
+    function splitSqlStatementsWithTerminators(sql) {
+      const src = String(sql || '');
+      const out = [];
+      let cur = '', quote = '', depth = 0;
+      for (let i=0; i<src.length; i++) {
+        const ch = src[i], prev = src[i-1];
+        if ((ch === "'" || ch === '"' || ch === '`') && prev !== '\\') quote = quote === ch ? '' : (!quote ? ch : quote);
+        if (!quote) { if (ch === '(') depth++; if (ch === ')') depth = Math.max(0, depth-1); }
+        cur += ch;
+        if (!quote && depth === 0 && ch === ';') { out.push(cur.trim()); cur = ''; }
+        else if (!quote && depth === 0 && ch === '/' && /^\s*\/$/.test(cur.trim())) { out.push(cur.trim()); cur = ''; }
+      }
+      if (cur.trim()) out.push(cur.trim());
+      return out.filter(Boolean);
+    }
+    function describeSqlColumnOrConstraint(def) {
+      const clean = String(def || '').trim().replace(/,$/, '');
+      if (!clean) return '';
+      if (/^CONSTRAINT\s+\S+\s+PRIMARY\s+KEY/i.test(clean) || /^PRIMARY\s+KEY/i.test(clean)) return 'Define la clave primaria de la tabla.';
+      if (/^CONSTRAINT\s+\S+\s+FOREIGN\s+KEY/i.test(clean) || /^FOREIGN\s+KEY/i.test(clean)) {
+        const m = clean.match(/FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+([\w$#`".\[\]]+)\s*\(([^)]+)\)/i);
+        return m ? `Define una clave foránea: ${m[1].trim()} referencia ${cleanIdentifier(m[2]).split('.').pop()}(${m[3].trim()}).` : 'Define una clave foránea hacia otra tabla.';
+      }
+      if (/^CONSTRAINT\s+\S+\s+UNIQUE/i.test(clean) || /^UNIQUE\s*\(/i.test(clean)) return 'Impone unicidad para evitar duplicados en una o varias columnas.';
+      if (/^CONSTRAINT\s+\S+\s+CHECK/i.test(clean) || /^CHECK\b/i.test(clean)) return 'Valida una regla de negocio mediante CHECK.';
+      const m = clean.match(/^([`"\[]?[\w$#]+[`"\]]?)\s+(.+)$/i);
+      if (!m) return 'Definición interna de la tabla.';
+      const col = cleanIdentifier(m[1]);
+      const tail = m[2];
+      const parts = [];
+      if (/PRIMARY\s+KEY/i.test(tail)) parts.push('clave primaria');
+      if (/REFERENCES/i.test(tail)) parts.push('clave foránea');
+      if (/NOT\s+NULL/i.test(tail)) parts.push('obligatoria'); else parts.push('opcional');
+      if (/UNIQUE/i.test(tail)) parts.push('única');
+      if (/DEFAULT/i.test(tail)) parts.push('con valor por defecto');
+      if (/CHECK/i.test(tail)) parts.push('con validación CHECK');
+      return `Columna ${col}: ${parts.join(', ')}. Tipo detectado: ${(tail.match(/^([\w]+(?:\s*\([^)]*\))?)/i)||[])[1] || 'no identificado'}.`;
+    }
+    function annotateCreateTableStatement(stmt) {
+      const m = stmt.match(/^(CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:[`"\[]?[\w$#]+[`"\]]?\.)?[`"\[]?[\w$#]+[`"\]]?)\s*\()([\s\S]*)(\)\s*;?)$/i);
+      if (!m) return stmt;
+      const tableName = cleanIdentifier(m[2]).split('.').pop();
+      const body = m[3];
+      const defs = splitDefinitions(body);
+      const annotatedDefs = defs.map((def, idx) => {
+        const comma = idx < defs.length - 1 ? ',' : '';
+        return `    -- ${describeSqlColumnOrConstraint(def)}\n    ${def.replace(/,+\s*$/, '')}${comma}`;
+      }).join('\n');
+      return `-- Tabla ${tableName}: almacena información principal del dominio y sus restricciones.\n${m[1]}\n${annotatedDefs}\n${m[4]}`;
+    }
+    function describeSqlStatement(stmt) {
+      const one = String(stmt || '').replace(/\s+/g, ' ').trim();
+      let m;
+      if ((m = one.match(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w$#`".\[\]]+)/i))) return `Crea la tabla ${cleanIdentifier(m[1]).split('.').pop()} y define sus columnas, claves y reglas.`;
+      if ((m = one.match(/^CREATE\s+(?:UNIQUE\s+)?INDEX\s+([\w$#`"\[\]]+)\s+ON\s+([\w$#`".\[\]]+)\s*\(([^)]+)\)/i))) return `Crea un índice sobre ${cleanIdentifier(m[2]).split('.').pop()}(${m[3].trim()}) para acelerar búsquedas y joins.`;
+      if ((m = one.match(/^CREATE\s+OR\s+REPLACE\s+VIEW\s+([\w$#`".\[\]]+)/i)) || (m = one.match(/^CREATE\s+VIEW\s+([\w$#`".\[\]]+)/i))) return `Crea la vista ${cleanIdentifier(m[1]).split('.').pop()} para consultar datos combinados sin repetir joins.`;
+      if ((m = one.match(/^CREATE\s+OR\s+REPLACE\s+TRIGGER\s+([\w$#`".\[\]]+)/i)) || (m = one.match(/^CREATE\s+TRIGGER\s+([\w$#`".\[\]]+)/i))) return `Crea el trigger ${cleanIdentifier(m[1]).split('.').pop()} para automatizar una acción ante cambios en datos.`;
+      if ((m = one.match(/^ALTER\s+TABLE\s+([\w$#`".\[\]]+)/i))) return `Modifica la tabla ${cleanIdentifier(m[1]).split('.').pop()}, normalmente para añadir restricciones o relaciones.`;
+      if ((m = one.match(/^INSERT\s+INTO\s+([\w$#`".\[\]]+)/i))) return `Inserta datos de ejemplo o carga inicial en ${cleanIdentifier(m[1]).split('.').pop()}.`;
+      if (/^COMMIT\b/i.test(one)) return 'Confirma definitivamente los cambios de datos realizados en la transacción.';
+      if (/^BEGIN\b/i.test(one)) return 'Bloque PL/SQL para ejecutar lógica procedural o tareas de mantenimiento.';
+      if (/^SELECT\b/i.test(one)) return 'Consulta de análisis para obtener información del modelo.';
+      return 'Bloque SQL del script.';
+    }
+    function buildAutoCommentedSql(sql) {
+      const statements = splitSqlStatementsWithTerminators(sql || '');
+      if (!statements.length) return sql || '';
+      return statements.map(stmt => {
+        const trimmed = stmt.trim();
+        if (/^CREATE\s+TABLE\b/i.test(trimmed)) return annotateCreateTableStatement(trimmed);
+        return `-- ${describeSqlStatement(trimmed)}\n${trimmed}`;
+      }).join('\n\n');
+    }
+    function ensureCleanSqlSnapshot() {
+      if (!showingCommentedSql) cleanSqlSnapshot = sqlInput.value;
+      if (!cleanSqlSnapshot.trim()) cleanSqlSnapshot = sqlInput.value;
+      return cleanSqlSnapshot;
+    }
+    function showCommentedSql() {
+      const clean = ensureCleanSqlSnapshot();
+      commentedSqlSnapshot = buildAutoCommentedSql(clean);
+      sqlInput.value = commentedSqlSnapshot;
+      showingCommentedSql = true;
+      setStatus('SQL comentado generado. Puedes volver a la versión sin comentar cuando quieras.', 'ok');
+    }
+    function restoreCleanSql() {
+      if (!cleanSqlSnapshot.trim()) { setStatus('No hay versión sin comentar guardada todavía.', 'warn'); return; }
+      sqlInput.value = cleanSqlSnapshot;
+      showingCommentedSql = false;
+      setStatus('Versión sin comentar restaurada.', 'ok');
+    }
+    function downloadCommentedSql() {
+      const clean = ensureCleanSqlSnapshot();
+      const commented = commentedSqlSnapshot || buildAutoCommentedSql(clean);
+      downloadTextFile('sql-visual-reviewer-v31-comentado.sql', commented, 'text/sql;charset=utf-8');
+      setStatus('SQL comentado descargado.', 'ok');
+    }
+    function downloadCleanSql() {
+      const clean = showingCommentedSql ? cleanSqlSnapshot : sqlInput.value;
+      downloadTextFile('sql-visual-reviewer-v31-sin-comentarios.sql', clean, 'text/sql;charset=utf-8');
+      setStatus('SQL sin comentar descargado.', 'ok');
+    }
+
+    // buildReviewMarkdown overridden by v31 version below
+    function buildReviewMarkdown() { return '# SQL Visual Reviewer v35\n\nSin análisis disponible.\n'; }
+    function copyReviewSummary() {
+      const md = buildReviewMarkdown();
+      navigator.clipboard?.writeText(md).then(() => setStatus('Informe copiado al portapapeles.', 'ok')).catch(() => { downloadTextFile('sql-visual-reviewer-v31-informe.md', md, 'text/markdown;charset=utf-8'); setStatus('No se pudo copiar; se descargó el informe Markdown.', 'warn'); });
+    }
+    function exportReviewMarkdown() { downloadTextFile('sql-visual-reviewer-v31-informe.md', buildReviewMarkdown(), 'text/markdown;charset=utf-8'); setStatus('Informe Markdown exportado.', 'ok'); }
+    function openPrintableReview() {
+      const md = buildReviewMarkdown();
+      const html = md.split('\n').map(line => {
+        if (line.startsWith('> ')) return `<blockquote>${escapeHtml(line.slice(2)).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</blockquote>`;
+        if (line.startsWith('# ')) return `<h1>${escapeHtml(line.slice(2))}</h1>`;
+        if (line.startsWith('## ')) return `<h2>${escapeHtml(line.slice(3))}</h2>`;
+        if (line.startsWith('### ')) return `<h3>${escapeHtml(line.slice(4))}</h3>`;
+        if (line.startsWith('| ')) return `<tr>${line.split('|').filter((_,i,a)=>i>0&&i<a.length-1).map(c=>`<td>${escapeHtml(c.trim()).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}</td>`).join('')}</tr>`;
+        if (line.startsWith('- ')) return `<li>${escapeHtml(line.slice(2)).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>')}</li>`;
+        if (line.startsWith('```')) return line === '```' ? '</pre>' : '<pre>';
+        if (!line.trim()) return '<br>';
+        return `<p>${escapeHtml(line).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>')}</p>`;
+      }).join('\n');
+      const w = window.open('', '_blank');
+      if (!w) { exportReviewMarkdown(); return; }
+      w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe SQL Visual Reviewer v35</title><style>body{font-family:Inter,Arial,sans-serif;line-height:1.6;max-width:900px;margin:32px auto;padding:0 24px;color:#172036}h1{font-size:26px;border-bottom:2px solid #4a7ab8;padding-bottom:8px}h2{font-size:18px;border-top:1px solid #ccd4ea;padding-top:16px;margin-top:24px}h3{font-size:15px;margin-top:14px;color:#2958dc}li{margin:5px 0}blockquote{background:#f5f8ff;border-left:4px solid #4a7ab8;padding:10px 14px;margin:0;border-radius:0 8px 8px 0;color:#5a6898;font-style:italic}table{border-collapse:collapse;width:100%;margin:10px 0}td,th{border:1px solid #ddd;padding:7px 12px;text-align:left}tr:nth-child(even){background:#f8faff}pre{background:#f0f4ff;padding:10px;border-radius:6px;font-size:13px;overflow:auto}code{background:#f0f4ff;padding:1px 4px;border-radius:4px;font-size:13px}@media print{body{margin:0;max-width:none}h2{page-break-before:auto}}</style></head><body>${html}<script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
+      w.document.close();
+      setStatus('Informe PDF preparado en una ventana imprimible.', 'ok');
+    }
+    function makeExportSvgSource() {
+      const clone = diagram.cloneNode(true);
+      const vb = diagram.viewBox.baseVal;
+      const exportWidth = Math.max(1200, Math.ceil(vb.width || 1700));
+      const exportHeight = Math.max(900, Math.ceil(vb.height || 1100));
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('width', exportWidth); clone.setAttribute('height', exportHeight);
+      clone.setAttribute('viewBox', `0 0 ${exportWidth} ${exportHeight}`);
+      const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+      style.textContent = Array.from(document.styleSheets).map(sheet => { try { return Array.from(sheet.cssRules).map(r => r.cssText).join('\n'); } catch (_) { return ''; } }).join('\n');
+      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs'); defs.appendChild(style); clone.insertBefore(defs, clone.firstChild);
+      const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bg.setAttribute('x','0'); bg.setAttribute('y','0'); bg.setAttribute('width',exportWidth); bg.setAttribute('height',exportHeight);
+      bg.setAttribute('fill', getComputedStyle(document.documentElement).getPropertyValue('--body-bg-1').trim() || '#0b1020');
+      clone.insertBefore(bg, clone.children[1] || null);
+      return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
+    }
+    function exportPng() {
+      if (!currentModel) { setStatus('Analiza un modelo antes de exportar PNG.', 'warn'); return; }
+      const svgSource = makeExportSvgSource();
+      const vb = diagram.viewBox.baseVal;
+      const width = Math.max(1200, Math.ceil(vb.width || 1700));
+      const height = Math.max(900, Math.ceil(vb.height || 1100));
+      const img = new Image();
+      const url = URL.createObjectURL(new Blob([svgSource], {type:'image/svg+xml;charset=utf-8'}));
+      img.onload = () => {
+        const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0, width, height);
+        URL.revokeObjectURL(url);
+        canvas.toBlob(blob => {
+          if (!blob) { setStatus('No se pudo generar el PNG.', 'danger'); return; }
+          const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: diagramModeEl.value === 'conceptual' ? 'diagrama-er-conceptual.png' : 'diagrama-relacional.png' });
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+          setStatus('PNG exportado.', 'ok');
+        }, 'image/png');
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); setStatus('No se pudo convertir el SVG a PNG en este navegador.', 'danger'); };
+      img.src = url;
+    }
+
 
     // ── Redraw & analyze ──────────────────────────────────────────────────────
     function redrawFromState() {
@@ -3192,12 +4138,16 @@
         if (showAllOverlayRelations || selectedOverlays.has(procKey)) refs.forEach(tbl => drawOverlayConnection({x,y,w,h}, {x:tbl.x,y:tbl.y,w:tbl.width,h:tbl.height}, 'procedure'));
       });
       const vb = diagram.viewBox.baseVal;
-      diagram.setAttribute('viewBox', `0 0 ${Math.max(vb.width || 0, overlayMaxX || 0, 1200)} ${Math.max(vb.height || 0, overlayMaxY || 0, 900)}`);
+      const nextDiagramW = Math.max(vb.width || 0, overlayMaxX || 0, 1200);
+      const nextDiagramH = Math.max(vb.height || 0, overlayMaxY || 0, 900);
+      diagram.setAttribute('viewBox', `0 0 ${nextDiagramW} ${nextDiagramH}`);
+      syncDiagramCanvasSize(nextDiagramW, nextDiagramH);
       attachDraggingOverlays();
     }
 
     function analyze() {
       const sql = sqlInput.value.trim();
+      if (!showingCommentedSql) cleanSqlSnapshot = sqlInput.value;
       if (!sql) { setStatus('Pega un script SQL antes de analizar.', 'warn'); return; }
       try {
         const model = parseCreateTables(sql, dialectEl.value);
@@ -3205,6 +4155,8 @@
         if (!model.tables.length) {
           setStatus('No se detectaron sentencias CREATE TABLE válidas.', 'danger');
           summaryEl.textContent = '0 tablas detectadas.';
+          currentReview = null;
+          renderReviewPanel();
           while (zoomLayer.firstChild) zoomLayer.removeChild(zoomLayer.firstChild);
           return;
         }
@@ -3214,6 +4166,8 @@
         currentProcedures = parseProcedures(sql, model);
         currentInserts = parseSampleInserts(sql, model);
         currentConceptual = buildConceptualModel(model, relations);
+        currentReview = reviewSqlModel(model, relations, sql);
+        activeReviewFilter = 'all';
         applyOverlayOverrides();
         selectedOverlays = new Set(Array.from(selectedOverlays).filter(key => getOverlayByKey(key)?.item));
         tablePositions = new Map(); conceptPositions = new Map();
@@ -3225,7 +4179,8 @@
         redrawFromState();
         updateEntitySelector();
         updateSummaryText();
-        setStatus(restoredLayout ? 'Análisis completado y layout recuperado automáticamente.' : 'Análisis completado correctamente.', 'ok');
+        renderReviewPanel();
+        setStatus(restoredLayout ? `Análisis completado · calidad ${currentReview.score}/100 · layout recuperado.` : `Análisis completado · calidad ${currentReview.score}/100.`, currentReview.score < 62 ? 'warn' : 'ok');
       } catch (err) {
         console.error(err);
         setStatus(`Error al analizar el script: ${err.message}`, 'danger');
@@ -3510,6 +4465,20 @@
     });
 
     document.getElementById('analyzeBtn').addEventListener('click', analyze);
+    ['indexDbSize','indexSensitivity','indexOnlyEvidence'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        refreshIndexTuningBadge();
+        if (currentModel) {
+          currentReview = reviewSqlModel(currentModel, currentRelations, sqlInput.value);
+          updateSummaryText();
+          renderReviewPanel();
+          setStatus('Sensibilidad de índices actualizada. Revisión recalculada.', 'ok');
+        }
+      });
+    });
+    refreshIndexTuningBadge();
     document.getElementById('syncFromSqlBtn').addEventListener('click', analyze);
     document.getElementById('syncToSqlBtn').addEventListener('click', () => {
       if (!currentModel) { setStatus('No hay modelo para convertir a SQL.', 'warn'); return; }
@@ -3551,11 +4520,33 @@
       const tableName = rawId.startsWith('entity:') ? rawId.slice(7) : rawId;
       openTableInspectModal(tableName, { showData: true });
     });
-    document.getElementById('sampleBtn').addEventListener('click', () => { sqlInput.value = exampleSql; analyze(); });
     document.getElementById('inspectSelectionBtn').addEventListener('click', openSelectionInspector);
     document.getElementById('inspectDataBtn').addEventListener('click', openSelectionData);
     window.addEventListener('beforeunload', persistCurrentLayout);
     document.getElementById('exportSvgBtn').addEventListener('click', exportSvg);
+    document.getElementById('exportPngBtn').addEventListener('click', exportPng);
+    document.getElementById('exportPdfBtn').addEventListener('click', openPrintableReview);
+    document.getElementById('exportMdBtn').addEventListener('click', exportReviewMarkdown);
+    document.getElementById('copyReviewBtn').addEventListener('click', copyReviewSummary);
+    document.getElementById('downloadReviewBtn').addEventListener('click', exportReviewMarkdown);
+    document.getElementById('commentSqlBtn').addEventListener('click', showCommentedSql);
+    document.getElementById('restoreSqlBtn').addEventListener('click', restoreCleanSql);
+    document.getElementById('downloadCommentedSqlBtn').addEventListener('click', downloadCommentedSql);
+    document.getElementById('downloadCleanSqlBtn').addEventListener('click', downloadCleanSql);
+    document.getElementById('convertSqlBtn')?.addEventListener('click', runSqlConverter);
+    document.getElementById('copyConvertedSqlBtn')?.addEventListener('click', async () => {
+      const value = document.getElementById('convertedSqlOutput')?.value || '';
+      if (!value.trim()) { setStatus('No hay SQL convertido para copiar.', 'warn'); return; }
+      await navigator.clipboard.writeText(value);
+      setStatus('SQL convertido copiado al portapapeles.', 'ok');
+    });
+    document.getElementById('downloadConvertedSqlBtn')?.addEventListener('click', () => {
+      const value = document.getElementById('convertedSqlOutput')?.value || '';
+      if (!value.trim()) { setStatus('No hay SQL convertido para descargar.', 'warn'); return; }
+      downloadTextFile('sql_convertido.sql', value, 'text/sql;charset=utf-8');
+    });
+    document.getElementById('converterTarget')?.addEventListener('change', () => { if (document.getElementById('convertedSqlOutput')?.value.trim()) runSqlConverter(); });
+    document.getElementById('converterSource')?.addEventListener('change', () => { if (document.getElementById('convertedSqlOutput')?.value.trim()) runSqlConverter(); });
     document.getElementById('saveLayoutBtn').addEventListener('click', () => {
       persistCurrentLayout();
       setStatus('Layout guardado en este navegador.', 'ok');
@@ -3575,7 +4566,7 @@
       sqlInput.value='';
       while (zoomLayer.firstChild) zoomLayer.removeChild(zoomLayer.firstChild);
       summaryEl.textContent='Sin análisis todavía.';
-      currentModel=null; currentRelations=[]; currentConceptual=null; currentViews=[]; currentTriggers=[]; currentProcedures=[]; currentInserts=new Map();
+      currentModel=null; currentRelations=[]; currentConceptual=null; currentViews=[]; currentTriggers=[]; currentProcedures=[]; currentInserts=new Map(); currentReview=null; activeReviewFilter='all'; cleanSqlSnapshot=''; commentedSqlSnapshot=''; showingCommentedSql=false;
       tablePositions=new Map(); conceptPositions=new Map();
       viewPositions=new Map(); triggerPositions=new Map();
       viewDescriptionOverrides=new Map(); triggerDescriptionOverrides=new Map();
@@ -3584,6 +4575,7 @@
       entitySelectorPanel.classList.remove('visible');
       relEditorPanel.classList.remove('visible');
       updateSchemaEditor();
+      renderReviewPanel();
       document.getElementById('crossingInfo').style.display='none';
       setStatus('Contenido limpiado.', 'ok');
     });
@@ -3621,111 +4613,835 @@
       });
     });
 
-    // ── Example SQL ───────────────────────────────────────────────────────────
-    const exampleSql = `CREATE TABLE alumno (
-    id_alumno NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    nombre VARCHAR2(50) NOT NULL,
-    apellidos VARCHAR2(100) NOT NULL,
-    telefono VARCHAR2(20),
-    correo VARCHAR2(60) UNIQUE,
+    // ── v31: SQL Examples library ─────────────────────────────────────────────
+    const SQL_EXAMPLES = [
+      {
+        id: 'ecommerce-correct',
+        name: 'Ecommerce correcto',
+        description: 'Modelo de tienda online completo con usuarios, productos, pedidos y pagos. Relaciones claras y claves correctas.',
+        type: 'correct',
+        tags: ['relaciones', 'fk', 'tabla puente', 'ecommerce'],
+        sql: `CREATE TABLE usuarios (
+  id_usuario INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(100) NOT NULL UNIQUE,
+  nombre VARCHAR(100) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  fecha_registro DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE categorias (
+  id_categoria INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(80) NOT NULL UNIQUE,
+  descripcion TEXT
+);
+
+CREATE TABLE productos (
+  id_producto INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(200) NOT NULL,
+  descripcion TEXT,
+  precio DECIMAL(10,2) NOT NULL,
+  stock INT NOT NULL DEFAULT 0,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  id_categoria INT NOT NULL,
+  CONSTRAINT fk_producto_categoria FOREIGN KEY (id_categoria) REFERENCES categorias(id_categoria)
+);
+
+CREATE TABLE pedidos (
+  id_pedido INT AUTO_INCREMENT PRIMARY KEY,
+  id_usuario INT NOT NULL,
+  fecha_pedido DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  estado VARCHAR(30) NOT NULL DEFAULT 'pendiente',
+  total DECIMAL(10,2) NOT NULL DEFAULT 0,
+  CONSTRAINT fk_pedido_usuario FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario)
+);
+
+CREATE TABLE detalle_pedido (
+  id_detalle INT AUTO_INCREMENT PRIMARY KEY,
+  id_pedido INT NOT NULL,
+  id_producto INT NOT NULL,
+  cantidad INT NOT NULL,
+  precio_unitario DECIMAL(10,2) NOT NULL,
+  UNIQUE (id_pedido, id_producto),
+  CONSTRAINT fk_detalle_pedido FOREIGN KEY (id_pedido) REFERENCES pedidos(id_pedido),
+  CONSTRAINT fk_detalle_producto FOREIGN KEY (id_producto) REFERENCES productos(id_producto)
+);
+
+CREATE TABLE pagos (
+  id_pago INT AUTO_INCREMENT PRIMARY KEY,
+  id_pedido INT NOT NULL,
+  metodo VARCHAR(30) NOT NULL,
+  importe DECIMAL(10,2) NOT NULL,
+  fecha_pago DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  estado VARCHAR(20) NOT NULL DEFAULT 'completado',
+  CONSTRAINT fk_pago_pedido FOREIGN KEY (id_pedido) REFERENCES pedidos(id_pedido)
+);
+
+CREATE INDEX idx_pedidos_usuario ON pedidos(id_usuario);
+CREATE INDEX idx_detalle_pedido ON detalle_pedido(id_pedido);
+CREATE INDEX idx_detalle_producto ON detalle_pedido(id_producto);
+CREATE INDEX idx_productos_categoria ON productos(id_categoria);`
+      },
+      {
+        id: 'ecommerce-errors',
+        name: 'Ecommerce con errores (IA)',
+        description: 'Modelo generado por IA con problemas intencionados: tabla sin PK, FK faltante, tipos incorrectos y nombres inconsistentes.',
+        type: 'errors',
+        tags: ['sin PK', 'FK faltante', 'fecha como VARCHAR', 'naming inconsistente', 'FLOAT monetario'],
+        sql: `-- Modelo generado por IA con errores comunes
+CREATE TABLE Users (
+  userID INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(255),
+  username VARCHAR(255),
+  password VARCHAR(255),
+  createdAt VARCHAR(30)
+);
+
+CREATE TABLE products (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  productName VARCHAR(255),
+  price FLOAT,
+  categoryId INT
+);
+
+CREATE TABLE Orders (
+  OrderID INT AUTO_INCREMENT PRIMARY KEY,
+  userID INT,
+  orderDate VARCHAR(30),
+  total_amount FLOAT,
+  status VARCHAR(50)
+);
+
+-- Tabla sin primary key
+CREATE TABLE order_items (
+  OrderID INT,
+  product_id INT,
+  qty INT,
+  unit_price FLOAT,
+  FOREIGN KEY (OrderID) REFERENCES Orders(OrderID)
+  -- FK a product_id falta
+);
+
+-- Relación M:N mal modelada (sin tabla puente explícita)
+CREATE TABLE product_tags (
+  product_id INT,
+  tag_name VARCHAR(100)
+);
+
+CREATE TABLE payments (
+  id_pago INT AUTO_INCREMENT PRIMARY KEY,
+  OrderID INT NOT NULL,
+  amount DOUBLE,
+  payment_date VARCHAR(30),
+  FOREIGN KEY (OrderID) REFERENCES Orders(OrderID)
+);`
+      },
+      {
+        id: 'academia',
+        name: 'Academia / Alumnos',
+        description: 'Sistema académico con alumnos, cursos, matrículas, profesores y departamentos. Incluye tabla puente correcta.',
+        type: 'correct',
+        tags: ['tabla puente', 'academia', 'relaciones claras'],
+        sql: `CREATE TABLE departamentos (
+  id_departamento INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL UNIQUE,
+  descripcion TEXT
+);
+
+CREATE TABLE profesores (
+  id_profesor INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL,
+  id_departamento INT NOT NULL,
+  CONSTRAINT fk_prof_depto FOREIGN KEY (id_departamento) REFERENCES departamentos(id_departamento)
+);
+
+CREATE TABLE cursos (
+  id_curso INT AUTO_INCREMENT PRIMARY KEY,
+  codigo VARCHAR(20) NOT NULL UNIQUE,
+  nombre VARCHAR(150) NOT NULL,
+  creditos INT NOT NULL,
+  id_profesor INT NOT NULL,
+  CONSTRAINT fk_curso_prof FOREIGN KEY (id_profesor) REFERENCES profesores(id_profesor)
+);
+
+CREATE TABLE alumnos (
+  id_alumno INT AUTO_INCREMENT PRIMARY KEY,
+  dni VARCHAR(15) UNIQUE NOT NULL,
+  nombre VARCHAR(100) NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL,
+  fecha_nacimiento DATE,
+  fecha_alta DATE NOT NULL DEFAULT (CURRENT_DATE)
+);
+
+CREATE TABLE matriculas (
+  id_matricula INT AUTO_INCREMENT PRIMARY KEY,
+  id_alumno INT NOT NULL,
+  id_curso INT NOT NULL,
+  fecha_matricula DATE NOT NULL DEFAULT (CURRENT_DATE),
+  nota DECIMAL(4,2),
+  estado VARCHAR(20) NOT NULL DEFAULT 'activa',
+  UNIQUE (id_alumno, id_curso),
+  CONSTRAINT fk_mat_alumno FOREIGN KEY (id_alumno) REFERENCES alumnos(id_alumno),
+  CONSTRAINT fk_mat_curso FOREIGN KEY (id_curso) REFERENCES cursos(id_curso)
+);
+
+CREATE INDEX idx_matriculas_alumno ON matriculas(id_alumno);
+CREATE INDEX idx_matriculas_curso ON matriculas(id_curso);
+CREATE INDEX idx_cursos_profesor ON cursos(id_profesor);`
+      },
+      {
+        id: 'inventario',
+        name: 'Inventario',
+        description: 'Control de stock con productos, categorías, proveedores, almacenes y movimientos de inventario.',
+        type: 'correct',
+        tags: ['inventario', 'movimientos', 'proveedores', 'almacenes'],
+        sql: `CREATE TABLE categorias (
+  id_categoria INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(80) NOT NULL UNIQUE,
+  descripcion VARCHAR(255)
+);
+
+CREATE TABLE proveedores (
+  id_proveedor INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(150) NOT NULL,
+  email VARCHAR(100),
+  telefono VARCHAR(30),
+  pais VARCHAR(80)
+);
+
+CREATE TABLE almacenes (
+  id_almacen INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  ubicacion VARCHAR(200),
+  activo TINYINT(1) NOT NULL DEFAULT 1
+);
+
+CREATE TABLE productos (
+  id_producto INT AUTO_INCREMENT PRIMARY KEY,
+  sku VARCHAR(50) NOT NULL UNIQUE,
+  nombre VARCHAR(200) NOT NULL,
+  id_categoria INT NOT NULL,
+  id_proveedor INT,
+  precio_coste DECIMAL(10,2),
+  stock_minimo INT NOT NULL DEFAULT 0,
+  CONSTRAINT fk_prod_cat FOREIGN KEY (id_categoria) REFERENCES categorias(id_categoria),
+  CONSTRAINT fk_prod_prov FOREIGN KEY (id_proveedor) REFERENCES proveedores(id_proveedor)
+);
+
+CREATE TABLE movimientos_stock (
+  id_movimiento INT AUTO_INCREMENT PRIMARY KEY,
+  id_producto INT NOT NULL,
+  id_almacen INT NOT NULL,
+  tipo ENUM('entrada','salida','ajuste') NOT NULL,
+  cantidad INT NOT NULL,
+  fecha_movimiento DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  referencia VARCHAR(100),
+  CONSTRAINT fk_mov_prod FOREIGN KEY (id_producto) REFERENCES productos(id_producto),
+  CONSTRAINT fk_mov_alm FOREIGN KEY (id_almacen) REFERENCES almacenes(id_almacen)
+);
+
+CREATE INDEX idx_mov_producto ON movimientos_stock(id_producto);
+CREATE INDEX idx_mov_almacen ON movimientos_stock(id_almacen);
+CREATE INDEX idx_mov_fecha ON movimientos_stock(fecha_movimiento);`
+      },
+      {
+        id: 'reservas',
+        name: 'Reservas / Hotel',
+        description: 'Sistema de reservas con clientes, habitaciones, reservas, pagos y estados.',
+        type: 'correct',
+        tags: ['reservas', 'estados', 'pagos', 'hotel'],
+        sql: `CREATE TABLE clientes (
+  id_cliente INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL,
+  telefono VARCHAR(30),
+  documento VARCHAR(30) UNIQUE
+);
+
+CREATE TABLE tipos_habitacion (
+  id_tipo INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(60) NOT NULL,
+  capacidad INT NOT NULL,
+  precio_noche DECIMAL(8,2) NOT NULL
+);
+
+CREATE TABLE habitaciones (
+  id_habitacion INT AUTO_INCREMENT PRIMARY KEY,
+  numero VARCHAR(10) NOT NULL UNIQUE,
+  id_tipo INT NOT NULL,
+  planta INT,
+  activa TINYINT(1) NOT NULL DEFAULT 1,
+  CONSTRAINT fk_hab_tipo FOREIGN KEY (id_tipo) REFERENCES tipos_habitacion(id_tipo)
+);
+
+CREATE TABLE reservas (
+  id_reserva INT AUTO_INCREMENT PRIMARY KEY,
+  id_cliente INT NOT NULL,
+  id_habitacion INT NOT NULL,
+  fecha_entrada DATE NOT NULL,
+  fecha_salida DATE NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'confirmada',
+  total DECIMAL(10,2) NOT NULL,
+  fecha_reserva DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_res_cliente FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente),
+  CONSTRAINT fk_res_hab FOREIGN KEY (id_habitacion) REFERENCES habitaciones(id_habitacion)
+);
+
+CREATE TABLE pagos_reserva (
+  id_pago INT AUTO_INCREMENT PRIMARY KEY,
+  id_reserva INT NOT NULL,
+  metodo VARCHAR(30) NOT NULL,
+  importe DECIMAL(10,2) NOT NULL,
+  fecha_pago DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pago_res FOREIGN KEY (id_reserva) REFERENCES reservas(id_reserva)
+);
+
+CREATE INDEX idx_reservas_cliente ON reservas(id_cliente);
+CREATE INDEX idx_reservas_hab ON reservas(id_habitacion);`
+      },
+      {
+        id: 'tabla-puente',
+        name: 'Tabla puente explícita (M:N)',
+        description: 'Ejemplo educativo: usuarios y roles con tabla puente usuario_roles. Demuestra que el revisor detecta tablas puente correctamente.',
+        type: 'educational',
+        tags: ['tabla puente', 'M:N', 'roles', 'usuarios'],
+        sql: `CREATE TABLE usuarios (
+  id_usuario INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(100) UNIQUE NOT NULL,
+  nombre VARCHAR(100) NOT NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1
+);
+
+CREATE TABLE roles (
+  id_rol INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(50) UNIQUE NOT NULL,
+  descripcion VARCHAR(200)
+);
+
+CREATE TABLE permisos (
+  id_permiso INT AUTO_INCREMENT PRIMARY KEY,
+  codigo VARCHAR(80) UNIQUE NOT NULL,
+  descripcion VARCHAR(200)
+);
+
+-- Tabla puente correcta: PK compuesta sobre FKs
+CREATE TABLE usuario_roles (
+  id_usuario INT NOT NULL,
+  id_rol INT NOT NULL,
+  fecha_asignacion DATE NOT NULL DEFAULT (CURRENT_DATE),
+  PRIMARY KEY (id_usuario, id_rol),
+  CONSTRAINT fk_ur_usuario FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario),
+  CONSTRAINT fk_ur_rol FOREIGN KEY (id_rol) REFERENCES roles(id_rol)
+);
+
+-- Tabla puente roles-permisos
+CREATE TABLE rol_permisos (
+  id_rol INT NOT NULL,
+  id_permiso INT NOT NULL,
+  PRIMARY KEY (id_rol, id_permiso),
+  CONSTRAINT fk_rp_rol FOREIGN KEY (id_rol) REFERENCES roles(id_rol),
+  CONSTRAINT fk_rp_permiso FOREIGN KEY (id_permiso) REFERENCES permisos(id_permiso)
+);`
+      },
+      {
+        id: 'historial-auditoria',
+        name: 'Historial / Auditoría',
+        description: 'Ejemplo educativo: pedidos con historial de estados. Demuestra que el revisor no confunde tablas de auditoría con tablas puente.',
+        type: 'educational',
+        tags: ['auditoría', 'historial', 'estados', 'no es tabla puente'],
+        sql: `CREATE TABLE clientes (
+  id_cliente INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL
+);
+
+CREATE TABLE pedidos (
+  id_pedido INT AUTO_INCREMENT PRIMARY KEY,
+  id_cliente INT NOT NULL,
+  fecha_pedido DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  estado VARCHAR(30) NOT NULL DEFAULT 'pendiente',
+  total DECIMAL(10,2) NOT NULL,
+  CONSTRAINT fk_ped_cli FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente)
+);
+
+-- Tabla de auditoría: no es tabla puente, guarda transiciones repetibles
+CREATE TABLE historial_pedidos (
+  id_historial INT AUTO_INCREMENT PRIMARY KEY,
+  id_pedido INT NOT NULL,
+  estado_anterior VARCHAR(30),
+  estado_nuevo VARCHAR(30) NOT NULL,
+  fecha_cambio DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  usuario_responsable VARCHAR(100),
+  CONSTRAINT fk_hist_pedido FOREIGN KEY (id_pedido) REFERENCES pedidos(id_pedido)
+);
+
+CREATE INDEX idx_hist_pedido_fecha ON historial_pedidos(id_pedido, fecha_cambio);
+CREATE INDEX idx_pedidos_cliente ON pedidos(id_cliente);`
+      },
+      {
+        id: 'modelo-minimo',
+        name: 'Modelo mínimo (2 tablas)',
+        description: 'Dos tablas relacionadas. Para pruebas rápidas del diagrama y el revisor.',
+        type: 'educational',
+        tags: ['mínimo', 'prueba rápida', 'simple'],
+        sql: `CREATE TABLE departamentos (
+  id_departamento INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL UNIQUE
+);
+
+CREATE TABLE empleados (
+  id_empleado INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  email VARCHAR(100) UNIQUE NOT NULL,
+  id_departamento INT NOT NULL,
+  fecha_alta DATE NOT NULL DEFAULT (CURRENT_DATE),
+  CONSTRAINT fk_emp_depto FOREIGN KEY (id_departamento) REFERENCES departamentos(id_departamento)
+);`
+      }
+    ];
+
+    function openExamplesModal() {
+      const grid = document.getElementById('examplesGrid');
+      grid.innerHTML = SQL_EXAMPLES.map(ex => {
+        const badgeClass = ex.type === 'correct' ? 'correct' : ex.type === 'errors' ? 'errors' : 'educational';
+        const badgeLabel = ex.type === 'correct' ? '✓ Modelo correcto' : ex.type === 'errors' ? '⚠ Con errores' : '📖 Caso educativo';
+        const tags = (ex.tags || []).map(t => `<span class="example-tag">${t}</span>`).join('');
+        return `<div class="example-card" data-example-id="${ex.id}">
+          <h4>${ex.name}</h4>
+          <p>${ex.description}</p>
+          <span class="example-badge ${badgeClass}">${badgeLabel}</span>
+          <div class="example-tags">${tags}</div>
+        </div>`;
+      }).join('');
+      grid.querySelectorAll('.example-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const ex = SQL_EXAMPLES.find(e => e.id === card.dataset.exampleId);
+          if (!ex) return;
+          sqlInput.value = ex.sql;
+          document.getElementById('examplesModal').classList.remove('visible');
+          cleanSqlSnapshot = ex.sql;
+          showingCommentedSql = false;
+          analyze();
+          setStatus(`Ejemplo "${ex.name}" cargado y analizado.`, 'ok');
+        });
+      });
+      document.getElementById('examplesModal').classList.add('visible');
+    }
+
+    document.getElementById('sampleBtn').addEventListener('click', openExamplesModal);
+    document.getElementById('examplesModalClose').addEventListener('click', () => document.getElementById('examplesModal').classList.remove('visible'));
+    document.getElementById('examplesModal').addEventListener('click', e => { if (e.target.id === 'examplesModal') e.currentTarget.classList.remove('visible'); });
+
+    // ── v31: Improved renderReviewPanel with natural language summary ──────────
+    function buildNaturalSummary(r) {
+      const s = r.stats;
+      const parts = [];
+      parts.push(`Se han detectado ${s.tables} tabla${s.tables !== 1 ? 's' : ''}`);
+      if (s.bridgeTables > 0) parts[0] += ` (${s.bridgeTables} tabla${s.bridgeTables !== 1 ? 's' : ''} puente)`;
+      parts[0] += ` y ${s.relations} relación${s.relations !== 1 ? 'es' : ''}`;
+      if (s.views > 0) parts[0] += `, ${s.views} vista${s.views !== 1 ? 's' : ''}`;
+      if (s.triggers > 0) parts[0] += `, ${s.triggers} trigger${s.triggers !== 1 ? 's' : ''}`;
+      parts[0] += '.';
+      if (s.critical === 0 && s.warning === 0 && s.info === 0) {
+        parts.push('No se han detectado problemas significativos en el modelo.');
+      } else {
+        const prioItems = [];
+        if (s.critical > 0) prioItems.push(`${s.critical} problema${s.critical !== 1 ? 's' : ''} crítico${s.critical !== 1 ? 's' : ''}`);
+        if (s.warning > 0) prioItems.push(`${s.warning} aviso${s.warning !== 1 ? 's' : ''}`);
+        if (s.info > 0) prioItems.push(`${s.info} mejora${s.info !== 1 ? 's' : ''} sugerida${s.info !== 1 ? 's' : ''}`);
+        parts.push(`Se han encontrado ${prioItems.join(', ')}.`);
+        // Specific priority guidance
+        const criticals = r.issues.filter(i => i.severity === 'critical');
+        if (criticals.length > 0) {
+          const tablesMentioned = [...new Set(criticals.map(i => i.table).filter(Boolean))];
+          if (tablesMentioned.length > 0) parts.push(`Revisa primero: ${tablesMentioned.slice(0,3).join(', ')}.`);
+        }
+      }
+      return parts.join(' ');
+    }
+
+    // ── v31: Issue enrichment data ────────────────────────────────────────────
+    const ISSUE_EXTRA = {
+      'sin-pk': {
+        why: 'Sin una clave primaria es más difícil identificar registros de forma única, mantener integridad referencial y crear relaciones fiables.',
+        fp: 'Puede ser aceptable en tablas temporales, logs de bajo nivel o staging tables usadas solo para importación.',
+        sqlHint: '-- Ejemplo de corrección:\nALTER TABLE mi_tabla ADD COLUMN id INT AUTO_INCREMENT PRIMARY KEY;'
+      },
+      'relaciones': {
+        why: 'Las claves foráneas documentan las relaciones del modelo, permiten joins seguros y protegen la integridad referencial.',
+        fp: 'En algunos modelos legacy o bases analíticas las FKs se gestionan en capa de aplicación por rendimiento.'
+      },
+      'indices': {
+        why: 'Sin índice, las búsquedas y joins sobre columnas FK escalan mal con el volumen de datos.',
+        fp: 'En tablas pequeñas o de solo lectura el índice puede no ser necesario.',
+        sqlHint: '-- Ejemplo:\nCREATE INDEX idx_nombre ON tabla(columna_fk);'
+      },
+      'nombres': {
+        why: 'La inconsistencia de nombres dificulta el mantenimiento y genera confusión al leer el esquema.',
+        fp: 'Si el proyecto hereda una convención existente, puede ser correcto mantenerla aunque no sea la preferida.'
+      },
+      'tipos': {
+        why: 'Tipos incompatibles entre FK y PK pueden causar errores de conversión implícita y afectar al rendimiento.',
+        fp: 'Algunos motores como MySQL permiten tipos "similares" (INT/BIGINT) sin error.'
+      },
+      'normalizacion': {
+        why: 'Sin restricciones de unicidad en tablas puente, pueden aparecer duplicados en la relación M:N.',
+        fp: 'Si la tabla es en realidad un log de eventos, los duplicados son esperados y no hay problema.'
+      },
+      'seguridad': {
+        why: 'Guardar credenciales sin hash o mezclar datos personales con credenciales aumenta el riesgo en caso de brecha.',
+        fp: 'El campo puede estar bien si contiene hashes (bcrypt, argon2) y la revisión es heurística basada en el nombre.'
+      },
+      'rendimiento': {
+        why: 'Campos de fecha como texto impiden usar funciones de fecha nativas y complican ordenación y filtrado eficiente.',
+        fp: 'En algunos casos puede ser un campo de texto libre (ej: notas de rango de fechas), no una fecha real.'
+      },
+      'dominio': { why: 'Campos esperados para este tipo de dominio suelen ser necesarios para la lógica de negocio.', fp: 'El modelo puede estar intencionalmente simplificado o calcularse desde otras tablas.' }
+    };
+
+    function getIssueExtra(issue) {
+      // Try to match by category or id prefix
+      const cat = issue.category || '';
+      for (const [key, val] of Object.entries(ISSUE_EXTRA)) {
+        if (cat === key || cat.startsWith(key) || (issue.id || '').includes(key)) return val;
+      }
+      return null;
+    }
+
+    // ── v31: Override renderReviewPanel ───────────────────────────────────────
+    function renderReviewPanel() {
+      if (!reviewHero || !reviewList || !reviewTabs) return;
+      const naturalSummaryEl = document.getElementById('reviewNaturalSummary');
+      if (!currentReview) {
+        reviewBadge.textContent = 'Sin analizar';
+        reviewHero.innerHTML = '<div class="review-score-row"><div class="review-score">--<small>/100</small></div><div class="review-grade medium">Pega SQL</div></div><div class="review-meter"><span style="width:0%"></span></div><div class="review-summary-grid"><div class="review-kpi"><b>0</b><span>Críticos</span></div><div class="review-kpi"><b>0</b><span>Avisos</span></div><div class="review-kpi"><b>0</b><span>Mejoras</span></div></div><div class="review-disclaimer">Revisión heurística: puede haber falsos positivos. No sustituye una revisión técnica completa.</div>';
+        reviewTabs.innerHTML = '';
+        if (naturalSummaryEl) naturalSummaryEl.innerHTML = '';
+        reviewList.innerHTML = '<div class="review-empty">Analiza un SQL para ver problemas de diseño, recomendaciones e índices sugeridos.</div>';
+        return;
+      }
+      const cls = currentReview.score >= 82 ? 'good' : currentReview.score >= 62 ? 'medium' : 'bad';
+      reviewBadge.textContent = `${currentReview.score}/100`;
+      reviewHero.innerHTML = `<div class="review-score-row"><div class="review-score">${currentReview.score}<small>/100</small></div><div class="review-grade ${cls}">${currentReview.grade}</div></div><div class="review-meter"><span style="width:${currentReview.score}%"></span></div><div class="review-summary-grid"><div class="review-kpi"><b>${currentReview.stats.critical}</b><span>Críticos</span></div><div class="review-kpi"><b>${currentReview.stats.warning}</b><span>Avisos</span></div><div class="review-kpi"><b>${currentReview.stats.info}</b><span>Mejoras</span></div></div><div class="review-disclaimer">Revisión heurística: puede haber falsos positivos. No sustituye una revisión técnica completa.</div>`;
+      if (naturalSummaryEl) {
+        naturalSummaryEl.innerHTML = `<div class="review-natural-summary">${escapeHtml(buildNaturalSummary(currentReview))}</div>`;
+      }
+      const filters = [['all', `Todo (${currentReview.issues.length})`], ['critical', `Críticos (${currentReview.stats.critical})`], ['warning', `Avisos (${currentReview.stats.warning})`], ['info', `Mejoras (${currentReview.stats.info})`], ['cardinalidad', 'FKs/Cardinalidad'], ['indices', 'Índices'], ['normalizacion', 'Normalización'], ['tipos', 'Tipos'], ['relaciones', 'Relaciones'], ['nombres', 'Nombres']];
+      reviewTabs.innerHTML = filters.map(([key,label]) => `<button class="review-tab ${activeReviewFilter===key?'active':''}" data-review-filter="${key}">${label}</button>`).join('');
+      reviewTabs.querySelectorAll('[data-review-filter]').forEach(btn => btn.addEventListener('click', () => { activeReviewFilter = btn.dataset.reviewFilter; renderReviewPanel(); }));
+      const visible = currentReview.issues.filter(i => activeReviewFilter === 'all' || i.severity === activeReviewFilter || i.category === activeReviewFilter);
+      if (!visible.length) { reviewList.innerHTML = '<div class="review-empty">No hay problemas en este filtro.</div>'; return; }
+      reviewList.innerHTML = '';
+      visible.forEach(issue => {
+        const extra = getIssueExtra(issue);
+        const article = document.createElement('article');
+        article.className = 'review-item';
+        article.dataset.issueId = issue.id;
+        const sevLabel = issue.severity === 'critical' ? 'CRÍTICO' : issue.severity === 'warning' ? 'AVISO' : 'MEJORA';
+        let extraHtml = '';
+        if (extra) {
+          extraHtml += extra.why ? `<div class="review-why"><b>¿Por qué importa?</b> ${escapeHtml(extra.why)}</div>` : '';
+          extraHtml += extra.fp ? `<div class="review-fp">⚠ Posible falso positivo: ${escapeHtml(extra.fp)}</div>` : '';
+          extraHtml += extra.sqlHint ? `<div class="review-sql-ex">${escapeHtml(extra.sqlHint)}</div>` : '';
+        }
+        article.innerHTML = `
+          <div class="review-item-head">
+            <div>
+              <div class="review-title">${escapeHtml(issue.title)}</div>
+              <div class="review-meta">${escapeHtml(issue.table || 'modelo')}${issue.column ? '.' + escapeHtml(issue.column) : ''} · ${escapeHtml(issue.category)}</div>
+            </div>
+            <span class="sev ${issue.severity}">${sevLabel}</span>
+          </div>
+          <div class="review-desc">${escapeHtml(issue.detail)}</div>
+          <div class="review-fix"><b>Recomendación:</b> ${escapeHtml(issue.fix)}</div>
+          ${extra ? `<div class="review-item-extra" id="extra-${escapeHtml(issue.id)}">${extraHtml}</div><button class="review-expand-btn" data-target="extra-${escapeHtml(issue.id)}">▸ Ver más detalle</button>` : ''}
+        `;
+        if (extra) {
+          const btn = article.querySelector('.review-expand-btn');
+          btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const target = document.getElementById(btn.dataset.target);
+            if (!target) return;
+            const open = target.classList.toggle('open');
+            btn.textContent = open ? '▾ Ocultar detalle' : '▸ Ver más detalle';
+          });
+        }
+        article.addEventListener('click', () => focusReviewIssue(issue.id));
+        reviewList.appendChild(article);
+      });
+    }
+
+    // ── v31: Improved Markdown export ─────────────────────────────────────────
+    function buildReviewMarkdown() {
+      if (!currentReview || !currentModel) return '# SQL Visual Reviewer v35\n\nSin análisis disponible.\n';
+      const r = currentReview;
+      const now = new Date().toLocaleString('es-ES');
+      let out = `# Informe del modelo SQL\n\n`;
+      out += `> Generado por SQL Visual Reviewer v35 · ${now}\n\n`;
+      out += `## Resumen ejecutivo\n\n`;
+      out += `| Métrica | Valor |\n|---|---|\n`;
+      out += `| Puntuación | **${r.score}/100** (${r.grade}) |\n`;
+      out += `| Tablas | ${r.stats.tables} |\n`;
+      out += `| Relaciones | ${r.stats.relations} |\n`;
+      out += `| Tablas puente | ${r.stats.bridgeTables} |\n`;
+      out += `| Vistas | ${r.stats.views} |\n`;
+      out += `| Triggers | ${r.stats.triggers} |\n`;
+      out += `| Problemas críticos | **${r.stats.critical}** |\n`;
+      out += `| Avisos | ${r.stats.warning} |\n`;
+      out += `| Mejoras sugeridas | ${r.stats.info} |\n\n`;
+      out += `## Diagnóstico general\n\n${buildNaturalSummary(r)}\n\n`;
+      [['critical','## Problemas críticos'], ['warning','## Avisos'], ['info','## Mejoras recomendadas']].forEach(([sev, title]) => {
+        const items = r.issues.filter(i => i.severity === sev);
+        out += `${title}\n\n`;
+        if (!items.length) { out += '_No se han detectado._\n\n'; return; }
+        items.forEach(i => {
+          out += `### ${i.title}\n\n`;
+          out += `- **Categoría:** ${i.category}\n`;
+          if (i.table) out += `- **Afecta a:** \`${i.table}${i.column ? '.' + i.column : ''}\`\n`;
+          out += `- **Descripción:** ${i.detail}\n`;
+          out += `- **Recomendación:** ${i.fix}\n\n`;
+        });
+      });
+      out += `## Tablas detectadas\n\n`;
+      (currentModel.tables || []).forEach(t => {
+        const pks = (t.primaryKey || []).join(', ') || '—';
+        const fks = (t.foreignKeys || []).map(fk => `${fk.columns.join(',')} → ${fk.refTable}(${fk.refColumns.join(',')})`).join('; ') || '—';
+        out += `### ${t.name}${t.isBridge ? ' _(tabla puente)_' : ''}\n\n`;
+        out += `- **Columnas:** ${(t.columns || []).map(c => `\`${c.name}\` ${c.type}${c.isPk ? ' PK' : ''}${c.isFk ? ' FK' : ''}${c.isNullable === false ? ' NOT NULL' : ''}`).join(', ')}\n`;
+        out += `- **Clave primaria:** ${pks}\n`;
+        out += `- **Claves foráneas:** ${fks}\n\n`;
+      });
+      out += `## Relaciones detectadas\n\n`;
+      (currentRelations || []).forEach(rel => {
+        out += `- \`${rel.from}\`.${rel.fk.columns.join(',')} → \`${rel.to}\`.${rel.fk.refColumns.join(',')} (${rel.style})\n`;
+      });
+      out += `\n## Recomendaciones SQL\n\n`;
+      const sqlRecs = r.issues.filter(i => (i.fix || '').toLowerCase().includes('create index') || (i.fix || '').toLowerCase().includes('alter table'));
+      if (sqlRecs.length) {
+        sqlRecs.forEach(i => out += `\`\`\`sql\n-- ${i.title}\n-- ${i.fix}\n\`\`\`\n\n`);
+      } else { out += '_No se han generado snippets SQL específicos._\n\n'; }
+      out += `## Preguntas útiles para mejorar el modelo con IA\n\n`;
+      out += `- ¿Qué claves foráneas faltan y qué cardinalidad deberían tener?\n`;
+      out += `- ¿Qué índices necesito para las consultas más frecuentes?\n`;
+      out += `- ¿Qué tablas mezclan responsabilidades y deberían normalizarse?\n`;
+      out += `- ¿Qué campos deberían cambiar de tipo de dato?\n\n`;
+      out += `## Limitaciones de la revisión\n\n`;
+      out += `> Este informe se basa en reglas heurísticas y no sustituye una revisión técnica completa. Algunas recomendaciones pueden no aplicar según el contexto del proyecto, volumen de datos o motor SQL usado. Puede haber falsos positivos.\n\n`;
+      return out;
+    }
+
+    // ── v31: TEST_CASES and runInternalTests ──────────────────────────────────
+    const TEST_CASES = [
+      {
+        id: 'missing-pk',
+        name: 'Tabla sin primary key',
+        sql: `CREATE TABLE sin_pk (nombre VARCHAR(100), email VARCHAR(100));`,
+        expectedIssues: [i => i.title.toLowerCase().includes('primaria') || i.title.toLowerCase().includes('primary') || i.title.toLowerCase().includes('pk')]
+      },
+      {
+        id: 'fk-to-nonexistent',
+        name: 'FK a tabla inexistente',
+        sql: `CREATE TABLE pedidos (id INT PRIMARY KEY, id_cliente INT NOT NULL, FOREIGN KEY (id_cliente) REFERENCES clientes_inexistentes(id));`,
+        expectedIssues: [i => i.severity === 'critical' && i.title.toLowerCase().includes('inexistente')]
+      },
+      {
+        id: 'valid-fk',
+        name: 'FK válida entre dos tablas',
+        sql: `CREATE TABLE categorias (id INT PRIMARY KEY, nombre VARCHAR(80));
+CREATE TABLE productos (id INT PRIMARY KEY, id_categoria INT NOT NULL, FOREIGN KEY (id_categoria) REFERENCES categorias(id));`,
+        expectedIssues: [] // should NOT have critical fk issues
+      },
+      {
+        id: 'bridge-table',
+        name: 'Tabla puente detectada',
+        sql: `CREATE TABLE usuarios (id INT PRIMARY KEY, nombre VARCHAR(80));
+CREATE TABLE roles (id INT PRIMARY KEY, nombre VARCHAR(50));
+CREATE TABLE usuario_roles (id_usuario INT NOT NULL, id_rol INT NOT NULL, PRIMARY KEY (id_usuario, id_rol), FOREIGN KEY (id_usuario) REFERENCES usuarios(id), FOREIGN KEY (id_rol) REFERENCES roles(id));`,
+        expectedIssues: [] // bridge table should be identified; no critical errors
+      },
+      {
+        id: 'date-as-varchar',
+        name: 'Campo de fecha como VARCHAR',
+        sql: `CREATE TABLE eventos (id INT PRIMARY KEY, nombre VARCHAR(100), fecha_evento VARCHAR(30));`,
+        expectedIssues: [i => i.category === 'tipos' || i.title.toLowerCase().includes('fecha') || i.title.toLowerCase().includes('text')]
+      },
+      {
+        id: 'monetary-float',
+        name: 'Campo monetario con FLOAT',
+        sql: `CREATE TABLE ventas (id INT PRIMARY KEY, total FLOAT NOT NULL);`,
+        expectedIssues: [i => i.title.toLowerCase().includes('float') || i.title.toLowerCase().includes('decimal') || i.category === 'tipos']
+      },
+      {
+        id: 'password-plaintext',
+        name: 'Contraseña como texto',
+        sql: `CREATE TABLE cuentas (id INT PRIMARY KEY, username VARCHAR(80), password VARCHAR(255));`,
+        expectedIssues: [i => i.title.toLowerCase().includes('password') || i.title.toLowerCase().includes('contraseña') || i.category === 'seguridad']
+      },
+      {
+        id: 'inconsistent-names',
+        name: 'Nombres inconsistentes',
+        sql: `CREATE TABLE Users (userID INT PRIMARY KEY, userName VARCHAR(80), fecha_registro DATE);
+CREATE TABLE pedidos (id_pedido INT PRIMARY KEY, userID INT, FOREIGN KEY (userID) REFERENCES Users(userID));`,
+        expectedIssues: [i => i.category === 'nombres']
+      },
+      {
+        id: 'audit-not-bridge',
+        name: 'Tabla de auditoría no clasificada como puente',
+        sql: `CREATE TABLE pedidos (id INT PRIMARY KEY, estado VARCHAR(30));
+CREATE TABLE historial_pedidos (id INT PRIMARY KEY, id_pedido INT NOT NULL, estado_nuevo VARCHAR(30), fecha DATE, FOREIGN KEY (id_pedido) REFERENCES pedidos(id));`,
+        expectedIssues: [] // historial should NOT be treated as bridge table
+      }
+    ];
+
+    window.runInternalTests = function() {
+      console.group('🧪 SQL Visual Reviewer v35 — Tests internos');
+      let passed = 0, failed = 0;
+      TEST_CASES.forEach(tc => {
+        try {
+          const model = parseCreateTables(tc.sql, 'mysql');
+          const relations = buildRelations(model);
+          const review = reviewSqlModel(model, relations, tc.sql);
+          const issues = review.issues;
+          if (tc.expectedIssues.length === 0) {
+            const criticals = issues.filter(i => i.severity === 'critical');
+            if (criticals.length === 0) {
+              console.log(`✅ PASS: ${tc.name}`);
+              passed++;
+            } else {
+              console.warn(`❌ FAIL: ${tc.name} — Críticos inesperados:`, criticals.map(i => i.title));
+              failed++;
+            }
+          } else {
+            const allFound = tc.expectedIssues.every(pred => issues.some(pred));
+            if (allFound) {
+              console.log(`✅ PASS: ${tc.name}`);
+              passed++;
+            } else {
+              const missing = tc.expectedIssues.filter(pred => !issues.some(pred));
+              console.warn(`❌ FAIL: ${tc.name} — Issues esperados no detectados (${missing.length})`);
+              console.warn('   Issues detectados:', issues.map(i => i.title));
+              failed++;
+            }
+          }
+        } catch (err) {
+          console.error(`💥 ERROR: ${tc.name}`, err);
+          failed++;
+        }
+      });
+      console.log(`\n📊 Resultado: ${passed} pasados, ${failed} fallidos de ${TEST_CASES.length} tests.`);
+      console.groupEnd();
+      return { passed, failed, total: TEST_CASES.length };
+    };
+    console.info('💡 SQL Visual Reviewer v35: ejecuta runInternalTests() en consola para correr los tests.');
+
+    // ── Default example SQL (academia/alumnos from v30) ───────────────────────
+    const exampleSql = `-- Ejemplo: Sistema de academia (modelo correcto)
+-- Carga uno de los 8 ejemplos disponibles desde "Cargar ejemplo"
+
+CREATE TABLE alumno (
+    id_alumno INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL,
+    apellidos VARCHAR(100) NOT NULL,
+    telefono VARCHAR(20),
+    correo VARCHAR(60) UNIQUE,
     fecha_alta DATE NOT NULL
 );
 
 CREATE TABLE personal (
-    id_personal NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    nombre VARCHAR2(50) NOT NULL,
-    apellidos VARCHAR2(100) NOT NULL,
-    telefono VARCHAR2(20),
-    correo VARCHAR2(60) UNIQUE,
-    salario NUMBER(10,2) NOT NULL,
+    id_personal INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL,
+    apellidos VARCHAR(100) NOT NULL,
+    telefono VARCHAR(20),
+    correo VARCHAR(60) UNIQUE,
+    salario DECIMAL(10,2) NOT NULL,
     fecha_alta DATE NOT NULL,
     fecha_baja DATE
 );
 
 CREATE TABLE modulo (
-    id_modulo NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    nombre VARCHAR2(60) NOT NULL,
-    descripcion CLOB,
-    precio NUMBER(10,2) NOT NULL,
-    horas_totales NUMBER NOT NULL,
-    estado VARCHAR2(20) NOT NULL
+    id_modulo INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(60) NOT NULL,
+    descripcion TEXT,
+    precio DECIMAL(10,2) NOT NULL,
+    horas_totales INT NOT NULL,
+    estado VARCHAR(20) NOT NULL DEFAULT 'activo'
 );
 
 CREATE TABLE matricula (
-    id_matricula NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    id_matricula INT AUTO_INCREMENT PRIMARY KEY,
     fecha_matricula DATE NOT NULL,
-    importe NUMBER(10,2) NOT NULL,
-    estado VARCHAR2(20) NOT NULL,
-    id_alumno NUMBER NOT NULL,
-    id_personal_gestiona NUMBER NOT NULL,
+    importe DECIMAL(10,2) NOT NULL,
+    estado VARCHAR(20) NOT NULL DEFAULT 'activa',
+    id_alumno INT NOT NULL,
+    id_personal_gestiona INT NOT NULL,
     CONSTRAINT fk_matricula_alumno FOREIGN KEY (id_alumno) REFERENCES alumno(id_alumno),
     CONSTRAINT fk_matricula_personal FOREIGN KEY (id_personal_gestiona) REFERENCES personal(id_personal)
 );
 
 CREATE TABLE matricula_modulo (
-    id_matricula_modulo NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    id_matricula NUMBER NOT NULL,
-    id_modulo NUMBER NOT NULL,
+    id_matricula_modulo INT AUTO_INCREMENT PRIMARY KEY,
+    id_matricula INT NOT NULL,
+    id_modulo INT NOT NULL,
     fecha_acceso DATE NOT NULL,
-    estado_modulo VARCHAR2(20) NOT NULL,
-    CONSTRAINT uq_matricula_modulo UNIQUE (id_matricula, id_modulo),
+    estado_modulo VARCHAR(20) NOT NULL DEFAULT 'iniciado',
+    UNIQUE (id_matricula, id_modulo),
     CONSTRAINT fk_mm_matricula FOREIGN KEY (id_matricula) REFERENCES matricula(id_matricula),
     CONSTRAINT fk_mm_modulo FOREIGN KEY (id_modulo) REFERENCES modulo(id_modulo)
 );
 
-CREATE VIEW vw_matriculas_detalle AS
-SELECT
-    m.id_matricula,
-    a.nombre AS alumno_nombre,
-    p.nombre AS gestor_nombre,
-    m.importe,
-    m.estado
-FROM matricula m
-JOIN alumno a ON a.id_alumno = m.id_alumno
-JOIN personal p ON p.id_personal = m.id_personal_gestiona;
-
-CREATE VIEW vw_modulos_por_matricula AS
-SELECT
-    mm.id_matricula,
-    mo.nombre AS modulo_nombre,
-    mm.estado_modulo
-FROM matricula_modulo mm
-JOIN modulo mo ON mo.id_modulo = mm.id_modulo;
-
-CREATE OR REPLACE TRIGGER trg_matricula_estado
-BEFORE INSERT ON matricula
-FOR EACH ROW
-BEGIN
-    :NEW.estado := NVL(:NEW.estado, 'activa');
-END;
-
-CREATE OR REPLACE TRIGGER trg_modulo_estado
-BEFORE INSERT ON modulo
-FOR EACH ROW
-BEGIN
-    :NEW.estado := NVL(:NEW.estado, 'activo');
-END;
-
-INSERT INTO alumno (id_alumno, nombre, apellidos, telefono, correo, fecha_alta)
-VALUES (1, 'Ana', 'López', '600111222', 'ana@example.com', DATE '2026-03-01');
-
-INSERT INTO personal (id_personal, nombre, apellidos, telefono, correo, salario, fecha_alta, fecha_baja)
-VALUES (1, 'Luis', 'Martín', '600333444', 'luis@example.com', 2100.00, DATE '2026-03-01', NULL);
-
-INSERT INTO modulo (id_modulo, nombre, descripcion, precio, horas_totales, estado)
-VALUES (1, 'SQL Avanzado', 'Curso intensivo de SQL', 199.00, 40, 'activo');
-
-INSERT INTO matricula (id_matricula, fecha_matricula, importe, estado, id_alumno, id_personal_gestiona)
-VALUES (1, DATE '2026-03-10', 199.00, 'activa', 1, 1);
-
-INSERT INTO matricula_modulo (id_matricula_modulo, id_matricula, id_modulo, fecha_acceso, estado_modulo)
-VALUES (1, 1, 1, DATE '2026-03-10', 'iniciado');`;
+CREATE INDEX idx_matricula_alumno ON matricula(id_alumno);
+CREATE INDEX idx_matricula_personal ON matricula(id_personal_gestiona);`;
 
     sqlInput.value = exampleSql;
     analyze();
     updateSchemaEditor();
   })();
   
+
+  // ── UI fullscreen + independent panels ─────────────────────────────────────
+  (() => {
+    const sidebarPanel = document.getElementById('sidebarPanel');
+    const viewerPanel = document.getElementById('viewerPanel');
+    const sidebarFullscreenBtn = document.getElementById('sidebarFullscreenBtn');
+    const diagramFullscreenBtn = document.getElementById('diagramFullscreenBtn');
+
+    const setFullscreenLabels = () => {
+      const active = document.fullscreenElement;
+      document.body.classList.toggle('is-fullscreen', !!active);
+      if (sidebarFullscreenBtn) {
+        sidebarFullscreenBtn.textContent = active === sidebarPanel ? '⤢' : '⛶';
+        sidebarFullscreenBtn.title = active === sidebarPanel ? 'Salir de pantalla completa' : 'Pantalla completa del panel lateral';
+      }
+      if (diagramFullscreenBtn) {
+        diagramFullscreenBtn.textContent = active === viewerPanel ? '⤢ Salir' : '⛶ Diagrama';
+        diagramFullscreenBtn.title = active === viewerPanel ? 'Salir de pantalla completa' : 'Pantalla completa del diagrama';
+      }
+    };
+
+    const toggleFullscreen = async (element) => {
+      if (!element) return;
+      try {
+        if (document.fullscreenElement === element) {
+          await document.exitFullscreen();
+        } else {
+          if (document.fullscreenElement) await document.exitFullscreen();
+          await element.requestFullscreen();
+        }
+      } catch (err) {
+        console.warn('No se pudo activar pantalla completa:', err);
+      } finally {
+        setFullscreenLabels();
+        const vb = document.getElementById('diagram')?.viewBox?.baseVal;
+        if (vb && typeof window.syncDiagramCanvasSize === 'function') window.syncDiagramCanvasSize(vb.width, vb.height);
+      }
+    };
+
+    sidebarFullscreenBtn?.addEventListener('click', () => toggleFullscreen(sidebarPanel));
+    diagramFullscreenBtn?.addEventListener('click', () => toggleFullscreen(viewerPanel));
+    document.addEventListener('fullscreenchange', setFullscreenLabels);
+    setFullscreenLabels();
+  })();
+
 </script>
 </body>
 </html>
