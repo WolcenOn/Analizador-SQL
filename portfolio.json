@@ -1,0 +1,10 @@
+{
+  "categoria": "Datos",
+  "icono": "📊",
+  "etiquetas": ["sql", "datos", "análisis", "bases de datos"],
+  "descripcion": "Herramienta para analizar consultas SQL o trabajar con bases de datos.",
+  "demo": "",
+  "destacado": false,
+  "orden": 60,
+  "ocultar": false
+}
